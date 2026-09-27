@@ -1,0 +1,21 @@
+{
+  "id": ".",
+  "name": "VilaCircula | Ciutat sostenible",
+  "short_name": "VilaCircula",
+  "description": "Gana y canjea EcoPuntos en Viladecans.",
+  "lang": "es-ES",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f5f7f1",
+  "theme_color": "#eff3e8",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
