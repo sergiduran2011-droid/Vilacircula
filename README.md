@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # VilaCircula
 
 PWA de demostración para Viladecans con API FastAPI.
@@ -99,3 +100,6 @@ La app combina una web PWA con una API FastAPI. La parte ciudadana gestiona sald
 3. mejora UX de login/caja
 4. separación demo vs producción
 5. caché inteligente y PWA más robusta
+=======
+# Vilacircula
+>>>>>>> a336e9ff0ce17392746a4d71676286bbe0b30ae0
