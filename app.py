@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 
 from config import AppConfig
+from db import connect_database, is_postgres_url
 from services import AnalyticsService
 
 ROOT = Path(__file__).resolve().parent
@@ -355,24 +356,28 @@ def create_app(
     allowed_origins = config.allowed_origins
     self_redeem_enabled = config.self_redeem_enabled
 
-    def connect() -> sqlite3.Connection:
-        connection = sqlite3.connect(db_path, timeout=10, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+    def connect():
+        return connect_database(config.database_url, db_path)
 
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if not is_postgres_url(config.database_url):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
     with closing(connect()) as connection:
         connection.executescript(SCHEMA)
-        profile_columns = {row["name"] for row in connection.execute("PRAGMA table_info(profiles)")}
-        if "username" not in profile_columns:
+        if is_postgres_url(config.database_url):
+            connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS username TEXT")
+            connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS password_hash TEXT")
+            connection.execute("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS merchant_id TEXT REFERENCES merchants(id)")
+            connection.execute("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS redeemed_by TEXT REFERENCES cashier_users(id)")
+        else:
+            profile_columns = {row["name"] for row in connection.execute("PRAGMA table_info(profiles)")}
+            coupon_columns = {row["name"] for row in connection.execute("PRAGMA table_info(coupons)")}
+        if not is_postgres_url(config.database_url) and "username" not in profile_columns:
             connection.execute("ALTER TABLE profiles ADD COLUMN username TEXT")
-        if "password_hash" not in profile_columns:
+        if not is_postgres_url(config.database_url) and "password_hash" not in profile_columns:
             connection.execute("ALTER TABLE profiles ADD COLUMN password_hash TEXT")
-        coupon_columns = {row["name"] for row in connection.execute("PRAGMA table_info(coupons)")}
-        if "merchant_id" not in coupon_columns:
+        if not is_postgres_url(config.database_url) and "merchant_id" not in coupon_columns:
             connection.execute("ALTER TABLE coupons ADD COLUMN merchant_id TEXT REFERENCES merchants(id)")
-        if "redeemed_by" not in coupon_columns:
+        if not is_postgres_url(config.database_url) and "redeemed_by" not in coupon_columns:
             connection.execute("ALTER TABLE coupons ADD COLUMN redeemed_by TEXT REFERENCES cashier_users(id)")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS profiles_username_idx ON profiles(username) WHERE username IS NOT NULL")
         legacy_profiles = connection.execute("SELECT id, display_name, token_hash, username, password_hash FROM profiles").fetchall()
@@ -385,7 +390,7 @@ def create_app(
                 connection.execute("UPDATE profiles SET username = ? WHERE id = ?", (username, legacy["id"]))
             if legacy["password_hash"] is None:
                 connection.execute(
-                    "INSERT OR IGNORE INTO auth_sessions (token_hash, subject_type, profile_id, created_at, expires_at) VALUES (?, 'citizen', ?, ?, ?)",
+                    "INSERT INTO auth_sessions (token_hash, subject_type, profile_id, created_at, expires_at) VALUES (?, 'citizen', ?, ?, ?) ON CONFLICT(token_hash) DO NOTHING",
                     (legacy["token_hash"], legacy["id"], timestamp(), (datetime.now(UTC) + timedelta(days=30)).isoformat()),
                 )
         for merchant in MERCHANTS:
@@ -402,12 +407,13 @@ def create_app(
         if initial_cashier_password:
             for username, merchant_id in CASHIER_SEEDS:
                 connection.execute(
-                    "INSERT OR IGNORE INTO cashier_users (id, username, password_hash, merchant_id, must_change_password, active, created_at) VALUES (?, ?, ?, ?, 1, 1, ?)",
+                    "INSERT INTO cashier_users (id, username, password_hash, merchant_id, must_change_password, active, created_at) VALUES (?, ?, ?, ?, 1, 1, ?) ON CONFLICT(username) DO NOTHING",
                     (str(uuid.uuid4()), username, hash_password(initial_cashier_password), merchant_id, timestamp()),
                 )
 
     app = FastAPI(title="VilaCircula API", version="1.0.0", description="API de demostración para perfiles, saldo y cupones de VilaCircula.")
     app.state.database_path = db_path
+    app.state.database_backend = "postgresql" if is_postgres_url(config.database_url) else "sqlite"
     app.state.config = config
     app.state.demo = not production
     app.state.production = production
@@ -592,7 +598,7 @@ def create_app(
         return {
             "status": "ok",
             "mode": "production" if production else "demo",
-            "persistent_database": str(db_path.name),
+            "persistent_database": app.state.database_backend,
             "production": production,
             "self_redeem_enabled": self_redeem_enabled,
             "allowed_origins": allowed_origins,

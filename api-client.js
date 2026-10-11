@@ -1,7 +1,15 @@
 (() => {
   const TOKEN_KEY = 'vilacircula-api-token';
   const PROFILE_KEY = 'vilacircula-local-profile';
-  const API = '/api/v1';
+  const API_CONFIG = fetch('./api-config.json')
+    .then(response => response.ok ? response.json() : {})
+    .catch(() => ({}));
+
+  async function apiUrl(path) {
+    const config = await API_CONFIG;
+    const origin = typeof config.apiBaseUrl === 'string' ? config.apiBaseUrl.replace(/\/+$/, '') : '';
+    return `${origin ? `${origin}/api/v1` : './api/v1'}${path}`;
+  }
   const status = document.createElement('div');
   status.className = 'api-status';
   status.setAttribute('role', 'status');
@@ -57,7 +65,7 @@
     const headers = new Headers(options.headers || {});
     if (bearerToken) headers.set('Authorization', `Bearer ${bearerToken}`);
     if (options.body) headers.set('Content-Type', 'application/json');
-    const response = await fetch(`${API}${path}`, { ...options, headers });
+    const response = await fetch(await apiUrl(path), { ...options, headers });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.detail || `Error del servidor (${response.status}).`);
     return payload;
@@ -169,7 +177,7 @@
       }
       resultNode.innerHTML = '<p class="profile-error">Cargando dashboard…</p>';
       try {
-        const response = await fetch('/api/v1/admin/analytics', {
+        const response = await fetch(await apiUrl('/admin/analytics'), {
           headers: { 'X-Admin-Key': key }
         });
         const payload = await response.json().catch(() => ({}));

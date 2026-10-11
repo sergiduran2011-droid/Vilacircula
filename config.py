@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from db import is_postgres_url as _is_postgres_url
+
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATABASE = ROOT / "data" / "vilacircula.sqlite3"
 
@@ -13,9 +15,7 @@ def get_database_url() -> str:
 
 
 def is_postgres_url(url: str | None) -> bool:
-    if not url:
-        return False
-    return url.startswith("postgresql://") or url.startswith("postgresql+psycopg://") or url.startswith("postgresql+psycopg2://") or url.startswith("postgres://")
+    return _is_postgres_url(url)
 
 
 def parse_bool(value: str | None, default: bool = False) -> bool:
@@ -54,7 +54,11 @@ class AppConfig:
         environment: str | None = None,
     ) -> "AppConfig":
         db_path = Path(database_path or os.getenv("VILACIRCULA_DATABASE", DEFAULT_DATABASE))
-        database_url = os.getenv("VILACIRCULA_DATABASE_URL") or os.getenv("DATABASE_URL") or f"sqlite:///{db_path.as_posix()}"
+        database_url = (
+            f"sqlite:///{db_path.as_posix()}"
+            if database_path is not None
+            else os.getenv("VILACIRCULA_DATABASE_URL") or os.getenv("DATABASE_URL") or f"sqlite:///{db_path.as_posix()}"
+        )
         env = (environment or os.getenv("VILACIRCULA_ENV", "development")).strip().lower()
         production = env == "production"
         self_redeem_enabled = allow_self_redeem if allow_self_redeem is not None else parse_bool(

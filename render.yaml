@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: vilacircula-api-sergiduran2011-droid
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+    envVars:
+      - key: VILACIRCULA_ENV
+        value: production
+      - key: VILACIRCULA_DATABASE_URL
+        sync: false
+      - key: VILACIRCULA_ALLOWED_ORIGINS
+        value: https://sergiduran2011-droid.github.io
+      - key: VILACIRCULA_INITIAL_CASHIER_PASSWORD
+        sync: false
+      - key: VILACIRCULA_ADMIN_KEY
+        generateValue: true
+      - key: VILACIRCULA_ALLOW_SELF_REDEEM
+        value: "0"
