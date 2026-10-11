@@ -1,0 +1,7 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+httpx>=0.27,<1
+pytest>=8,<9
+gunicorn>=23,<24
+psycopg[binary]>=3.2,<4
+alembic>=1.14,<2

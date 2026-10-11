@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.sqlite3
+.pytest_cache/
+.venv/
+.env
+.env.*
+!.env.example
+.DS_Store
+coverage.xml
+htmlcov/
+.vscode/
+.idea/
+*.log
+Dockerfile.local
