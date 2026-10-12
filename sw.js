@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vilacircula-v11';
+const CACHE_NAME = 'vilacircula-v12';
 const APP_FILES = ['./', './index.html', './manifest.json', './api-config.json', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './viladecans.js', './viladecans.css', './api-client.js', './api-client.css', './cashier.css'];
 
 self.addEventListener('install', event => {

@@ -682,6 +682,11 @@
       simulateEcoScan(ecoScan);
       return;
     }
+    if (event.target.closest('#account')) {
+      if (profile) openProfileDialog();
+      else openAuthDialog('login');
+      return;
+    }
     const reward = event.target.closest('[data-redeem]');
     if (reward && liveApi) {
       event.preventDefault();
