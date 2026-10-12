@@ -208,6 +208,15 @@ CREATE TABLE IF NOT EXISTS point_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS point_events_profile_created_idx ON point_events(profile_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS eco_id_tokens (
+    code TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL REFERENCES profiles(id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    scanned_at TEXT,
+    cashier_id TEXT REFERENCES cashier_users(id)
+);
+CREATE INDEX IF NOT EXISTS eco_id_tokens_profile_created_idx ON eco_id_tokens(profile_id, created_at DESC);
 """
 
 
@@ -250,6 +259,10 @@ class RewardRedeem(BaseModel):
 
 class CouponScan(BaseModel):
     code: str = Field(min_length=8, max_length=40, pattern=r"^VC-[A-Z0-9]+$")
+
+
+class EcoIdScan(BaseModel):
+    code: str = Field(min_length=37, max_length=37, pattern=r"^VCID-[A-F0-9]{32}$")
 
 
 PASSWORD_SCRYPT_N = 2**14
@@ -692,6 +705,18 @@ def create_app(
     def get_profile(profile: sqlite3.Row = Depends(current_profile)) -> dict[str, object]:
         return public_profile(profile)
 
+    @app.post("/api/v1/eco-id")
+    def issue_eco_id(profile: sqlite3.Row = Depends(current_profile)) -> dict[str, object]:
+        code = f"VCID-{secrets.token_hex(16).upper()}"
+        created_at = datetime.now(UTC)
+        expires_at = created_at + timedelta(seconds=45)
+        with closing(connect()) as connection:
+            connection.execute(
+                "INSERT INTO eco_id_tokens (code, profile_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                (code, profile["id"], created_at.isoformat(), expires_at.isoformat()),
+            )
+        return {"code": code, "expires_at": expires_at.isoformat(), "lifetime_seconds": 45}
+
     @app.put("/api/v1/profile")
     def update_profile(
         payload: ProfileUpdate,
@@ -918,6 +943,61 @@ def create_app(
             "is_demo": bool(cashier["merchant_is_demo"]),
         }
 
+    @app.post("/api/v1/cashier/eco-id/scan")
+    def cashier_scan_eco_id(
+        payload: EcoIdScan,
+        cashier: sqlite3.Row = Depends(current_cashier),
+    ) -> dict[str, object]:
+        if cashier["must_change_password"]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cambia la contraseña inicial antes de escanear EcoID.")
+        now = datetime.now(UTC)
+        scanned_at = now.isoformat()
+        with closing(connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            eco_id = connection.execute("SELECT * FROM eco_id_tokens WHERE code = ?", (payload.code,)).fetchone()
+            if eco_id is None:
+                connection.rollback()
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="EcoID no válido o ya no disponible.")
+            if eco_id["scanned_at"] is not None:
+                connection.rollback()
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Este EcoID ya se ha utilizado.")
+            if datetime.fromisoformat(eco_id["expires_at"]) <= now:
+                connection.rollback()
+                raise HTTPException(status_code=status.HTTP_410_GONE, detail="El EcoID ha caducado. Pide a la persona que genere otro.")
+            claimed = connection.execute(
+                "UPDATE eco_id_tokens SET scanned_at = ?, cashier_id = ? WHERE code = ? AND scanned_at IS NULL AND expires_at > ?",
+                (scanned_at, cashier["id"], payload.code, scanned_at),
+            )
+            if claimed.rowcount != 1:
+                connection.rollback()
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Este EcoID ya se ha utilizado.")
+            connection.execute(
+                "UPDATE profiles SET balance = balance + 10, contribution = contribution + 10 WHERE id = ?",
+                (eco_id["profile_id"],),
+            )
+            connection.execute(
+                "INSERT INTO point_events (id, profile_id, description, merchant, points, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), eco_id["profile_id"], "EcoID validado en caja", cashier["merchant_name"], 10, scanned_at),
+            )
+            person = connection.execute("SELECT display_name, balance FROM profiles WHERE id = ?", (eco_id["profile_id"],)).fetchone()
+            connection.commit()
+        add_audit_event(
+            "ecoid_awarded",
+            actor_type="cashier",
+            actor_id=cashier["id"],
+            target_type="profile",
+            target_id=eco_id["profile_id"],
+            message="EcoID validado · +10 puntos",
+            metadata={"merchant_id": cashier["merchant_id"], "points": 10},
+        )
+        return {
+            "display_name": person["display_name"],
+            "points": 10,
+            "balance": person["balance"],
+            "merchant": cashier["merchant_name"],
+            "is_demo": bool(cashier["merchant_is_demo"]),
+        }
+
     @app.post("/api/v1/admin/cashiers", status_code=status.HTTP_201_CREATED)
     def provision_cashier(
         payload: CashierProvision,
@@ -966,6 +1046,64 @@ def create_app(
             ).fetchall()
         return {"items": [{"id": row["id"], "code": row["code"], "status": row["status"], "reason": row["reason"], "validated_at": row["validated_at"], "details": json.loads(row["details"] or "{}") } for row in rows]}
 
+    @app.get("/api/v1/cashier/dashboard")
+    def cashier_dashboard(cashier: sqlite3.Row = Depends(current_cashier)) -> dict[str, object]:
+        now = datetime.now(UTC)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        week_start = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        with closing(connect()) as connection:
+            today_coupon_rows = connection.execute(
+                "SELECT status, COUNT(*) AS total FROM coupon_validations WHERE cashier_id = ? AND validated_at >= ? GROUP BY status",
+                (cashier["id"], day_start),
+            ).fetchall()
+            week_coupon_rows = connection.execute(
+                "SELECT validated_at, status FROM coupon_validations WHERE cashier_id = ? AND validated_at >= ? ORDER BY validated_at DESC LIMIT 500",
+                (cashier["id"], week_start),
+            ).fetchall()
+            week_ecoid_rows = connection.execute(
+                "SELECT created_at FROM audit_logs WHERE actor_id = ? AND event_type = 'ecoid_awarded' AND created_at >= ? ORDER BY created_at DESC LIMIT 500",
+                (cashier["id"], week_start),
+            ).fetchall()
+            recent_coupons = connection.execute(
+                "SELECT code, status, reason, validated_at FROM coupon_validations WHERE cashier_id = ? ORDER BY validated_at DESC LIMIT 8",
+                (cashier["id"],),
+            ).fetchall()
+            recent_ecoids = connection.execute(
+                "SELECT message, created_at FROM audit_logs WHERE actor_id = ? AND event_type = 'ecoid_awarded' ORDER BY created_at DESC LIMIT 8",
+                (cashier["id"],),
+            ).fetchall()
+            today_points = connection.execute(
+                "SELECT COUNT(*) AS total FROM eco_id_tokens WHERE cashier_id = ? AND scanned_at >= ?",
+                (cashier["id"], day_start),
+            ).fetchone()["total"]
+        today_counts = {row["status"]: row["total"] for row in today_coupon_rows}
+        daily_activity: dict[str, dict[str, int | str]] = {}
+        for row in week_coupon_rows:
+            day = row["validated_at"][:10]
+            daily_activity.setdefault(day, {"date": day, "coupons": 0, "ecoids": 0})
+            if row["status"] == "success":
+                daily_activity[day]["coupons"] += 1
+        for row in week_ecoid_rows:
+            day = row["created_at"][:10]
+            daily_activity.setdefault(day, {"date": day, "coupons": 0, "ecoids": 0})
+            daily_activity[day]["ecoids"] += 1
+        return {
+            "merchant": cashier["merchant_name"],
+            "is_demo": bool(cashier["merchant_is_demo"]),
+            "today": {
+                "successful_coupons": today_counts.get("success", 0),
+                "failed_coupons": today_counts.get("failed", 0),
+                "ecoid_scans": today_points,
+            },
+            "week": {
+                "successful_coupons": sum(row["status"] == "success" for row in week_coupon_rows),
+                "ecoid_scans": len(week_ecoid_rows),
+            },
+            "activity_by_day": sorted(daily_activity.values(), key=lambda item: item["date"]),
+            "recent_coupons": [dict(row) for row in recent_coupons],
+            "recent_ecoids": [dict(row) for row in recent_ecoids],
+        }
+
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
         return FileResponse(ROOT / "index.html")
@@ -974,7 +1112,7 @@ def create_app(
     def service_worker() -> FileResponse:
         return FileResponse(ROOT / "sw.js", media_type="application/javascript", headers={"Service-Worker-Allowed": "/"})
 
-    for asset in ("index.html", "manifest.json", "viladecans.js", "viladecans.css", "api-client.js", "api-client.css", "cashier.css"):
+    for asset in ("index.html", "manifest.json", "viladecans.js", "viladecans.css", "api-client.js", "api-client.css", "cashier.css", "cashier-dashboard.css"):
         app.add_api_route(f"/{asset}", lambda asset=asset: FileResponse(ROOT / asset), methods=["GET"], include_in_schema=False)
 
     app.mount("/icons", StaticFiles(directory=ROOT / "icons"), name="icons")

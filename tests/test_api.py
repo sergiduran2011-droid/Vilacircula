@@ -149,6 +149,71 @@ def test_cashier_is_scoped_to_merchant_and_initial_password_must_change(tmp_path
     assert duplicate_scan.status_code == 409
 
 
+def test_cashier_eco_id_award_is_authorized_single_use_and_updates_balance(tmp_path):
+    with make_client(tmp_path) as client:
+        _, citizen_headers = create_profile(client)
+        unauthorized_issue = client.post("/api/v1/eco-id")
+        issued = client.post("/api/v1/eco-id", headers=citizen_headers)
+        cashier_login = client.post("/api/v1/auth/cashier/login", json={"username": "caja.cafe-marco", "password": "Viladecans"})
+        cashier_headers = {"Authorization": f"Bearer {cashier_login.json()['token']}"}
+        before_password_change = client.post("/api/v1/cashier/eco-id/scan", json={"code": issued.json()["code"]}, headers=cashier_headers)
+        changed = client.put("/api/v1/cashier/password", json={"password": "clave-cajero-segura-23"}, headers=cashier_headers)
+        cashier_headers = {"Authorization": f"Bearer {changed.json()['token']}"}
+        awarded = client.post("/api/v1/cashier/eco-id/scan", json={"code": issued.json()["code"]}, headers=cashier_headers)
+        replayed = client.post("/api/v1/cashier/eco-id/scan", json={"code": issued.json()["code"]}, headers=cashier_headers)
+        profile = client.get("/api/v1/profile", headers=citizen_headers)
+        citizen_dashboard = client.get("/api/v1/cashier/dashboard", headers=citizen_headers)
+
+    assert issued.status_code == 200
+    assert unauthorized_issue.status_code == 401
+    assert issued.json()["code"].startswith("VCID-")
+    assert before_password_change.status_code == 403
+    assert awarded.status_code == 200
+    assert awarded.json()["points"] == 10
+    assert awarded.json()["balance"] == 160
+    assert replayed.status_code == 409
+    assert profile.json()["balance"] == 160
+    assert citizen_dashboard.status_code == 401
+
+
+def test_cashier_cannot_redeem_an_expired_eco_id(tmp_path):
+    with make_client(tmp_path) as client:
+        _, citizen_headers = create_profile(client)
+        issued = client.post("/api/v1/eco-id", headers=citizen_headers)
+        with sqlite3.connect(client.app.state.database_path) as connection:
+            connection.execute("UPDATE eco_id_tokens SET expires_at = ? WHERE code = ?", ("2020-01-01T00:00:00+00:00", issued.json()["code"]))
+        login = client.post("/api/v1/auth/cashier/login", json={"username": "caja.cafe-marco", "password": "Viladecans"})
+        cashier_headers = {"Authorization": f"Bearer {login.json()['token']}"}
+        changed = client.put("/api/v1/cashier/password", json={"password": "clave-cajero-segura-23"}, headers=cashier_headers)
+        cashier_headers = {"Authorization": f"Bearer {changed.json()['token']}"}
+        response = client.post("/api/v1/cashier/eco-id/scan", json={"code": issued.json()["code"]}, headers=cashier_headers)
+
+    assert response.status_code == 410
+
+
+def test_cashier_dashboard_reports_only_its_coupon_and_eco_id_activity(tmp_path):
+    with make_client(tmp_path) as client:
+        _, citizen_headers = create_profile(client)
+        eco_id = client.post("/api/v1/eco-id", headers=citizen_headers).json()["code"]
+        coupon = client.post("/api/v1/coupons", json={"reward_id": "coffee"}, headers=citizen_headers).json()["coupon"]["code"]
+        cashier_login = client.post("/api/v1/auth/cashier/login", json={"username": "caja.cafe-marco", "password": "Viladecans"})
+        cashier_headers = {"Authorization": f"Bearer {cashier_login.json()['token']}"}
+        changed = client.put("/api/v1/cashier/password", json={"password": "clave-cajero-segura-23"}, headers=cashier_headers)
+        cashier_headers = {"Authorization": f"Bearer {changed.json()['token']}"}
+        client.post("/api/v1/cashier/eco-id/scan", json={"code": eco_id}, headers=cashier_headers)
+        client.post("/api/v1/cashier/coupons/redeem", json={"code": coupon}, headers=cashier_headers)
+        dashboard = client.get("/api/v1/cashier/dashboard", headers=cashier_headers)
+        other_login = client.post("/api/v1/auth/cashier/login", json={"username": "caja.am-bakery", "password": "Viladecans"})
+        other_dashboard = client.get("/api/v1/cashier/dashboard", headers={"Authorization": f"Bearer {other_login.json()['token']}"})
+
+    assert dashboard.status_code == 200
+    assert dashboard.json()["merchant"] == "Café Marco"
+    assert dashboard.json()["today"] == {"successful_coupons": 1, "failed_coupons": 0, "ecoid_scans": 1}
+    assert dashboard.json()["week"] == {"successful_coupons": 1, "ecoid_scans": 1}
+    assert len(dashboard.json()["activity_by_day"]) == 1
+    assert other_dashboard.json()["today"] == {"successful_coupons": 0, "failed_coupons": 0, "ecoid_scans": 0}
+
+
 def test_self_scan_is_disabled_in_production_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("VILACIRCULA_ENV", "production")
     with make_client(tmp_path) as client:

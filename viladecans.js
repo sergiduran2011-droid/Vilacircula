@@ -12,6 +12,8 @@
   let scannerCanvas;
   let scannerTarget;
   let scanning = false;
+  let couponWatchTimer;
+  let couponWatchBusy = false;
 
   const styleLink = document.createElement('link');
   styleLink.rel = 'stylesheet';
@@ -357,6 +359,8 @@
   }
 
   function closeCouponModal() {
+    clearInterval(couponWatchTimer);
+    couponWatchTimer = null;
     scanning = false;
     if (scannerFrame) cancelAnimationFrame(scannerFrame);
     scannerFrame = null;
@@ -450,6 +454,35 @@
     document.querySelector('#close-coupon').addEventListener('click', closeCouponModal);
     document.querySelector('#start-coupon-scan').addEventListener('click', startCameraScan);
     document.querySelector('#simulate-coupon-scan')?.addEventListener('click', () => markRedeemed(coupon.code));
+    if (coupon && window.apiCouponStatus) {
+      couponWatchTimer = setInterval(async () => {
+        if (couponWatchBusy || !document.querySelector('#coupon-modal')) return;
+        couponWatchBusy = true;
+        try {
+          const redeemed = await window.apiCouponStatus(coupon.code);
+          if (redeemed) {
+            clearInterval(couponWatchTimer);
+            const section = document.querySelector('#coupon-modal .coupon-modal');
+            if (section && !section.querySelector('.coupon-success')) {
+              const success = document.createElement('div');
+              success.className = 'coupon-success';
+              success.setAttribute('role', 'status');
+              success.innerHTML = '<span class="coupon-success-mark"><i data-lucide="check"></i></span><strong>Cupón canjeado</strong><small></small>';
+              success.querySelector('small').textContent = `${coupon.name} ha sido validado en caja.`;
+              section.append(success);
+              icons();
+              await new Promise(resolve => setTimeout(resolve, 1250));
+            }
+            await window.refreshCitizenWallet?.();
+            closeCouponModal();
+          }
+        } catch {
+          // Keep the displayed coupon available if the network is temporarily offline.
+        } finally {
+          couponWatchBusy = false;
+        }
+      }, 3500);
+    }
   }
 
   function installEnhancements() {
