@@ -682,7 +682,7 @@
       simulateEcoScan(ecoScan);
       return;
     }
-    if (event.target.closest('#account')) {
+    if (event.target.closest('#account, [data-account]')) {
       if (profile) openProfileDialog();
       else openAuthDialog('login');
       return;
@@ -786,11 +786,9 @@
     }
     try {
       await request('/health');
-      setStatus('Inicia sesión con tu usuario y contraseña.', 'connected');
-      openAuthDialog('login');
+      setStatus('Pulsa Cuenta para iniciar sesión.', 'connected');
     } catch {
-      if (!localProfile) openAuthDialog('signup');
-      setStatus('API no disponible · crea un perfil local de demostración.', 'error');
+      setStatus('API no disponible · explora la app o abre Cuenta para iniciar sesión.', 'error');
     }
   }
 
