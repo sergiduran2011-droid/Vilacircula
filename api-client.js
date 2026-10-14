@@ -17,7 +17,7 @@
   document.querySelector('.topbar').after(status);
   const style = document.createElement('link');
   style.rel = 'stylesheet';
-  style.href = './api-client.css?v=18';
+  style.href = './api-client.css?v=20';
   document.head.append(style);
   const cashierStyle = document.createElement('link');
   cashierStyle.rel = 'stylesheet';
@@ -527,7 +527,7 @@
     localStorage.removeItem(TOKEN_KEY);
     document.body.classList.add('auth-locked');
     closeProfileDialog();
-    openAuthDialog('login');
+    openAuthDialog();
     setStatus('Sesión cerrada.', 'demo');
   }
 
@@ -929,7 +929,7 @@
     }
     if (event.target.closest('#account, [data-account]')) {
       if (profile) openProfileDialog();
-      else openAuthDialog('login');
+      else openAuthDialog();
       return;
     }
     const reward = event.target.closest('[data-redeem]');
@@ -1028,7 +1028,7 @@
         token = null;
       }
     }
-    openAuthDialog('login');
+    openAuthDialog();
     try {
       await request('/health');
       setStatus('Inicia sesión para acceder a VilaCircula.', 'connected');
