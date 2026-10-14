@@ -14,7 +14,11 @@ The frontend is static and does not contain database credentials. Account, coupo
 ## Features
 
 - Resident registration, login, profile, point balance, activity, rewards, and coupons.
+- A Viladecans merchant map with category filters, optional nearby sorting, OpenStreetMap source links, and directions for locations with coordinates. A listed location is not by itself confirmation of a merchant partnership.
+- Server-derived achievement badges and current/longest-day activity streaks based on recorded point events.
+- A school leaderboard that reports institute totals and resident standings without publishing other residents' names.
 - A cashier workspace with daily and weekly activity, a seven-day chart, recent validations, QR scanning, and manual code entry.
+- A resident wallet with active/redeemed coupon history and scannable coupon QR codes. In production, the merchant's authenticated cashier validates the QR; the resident cannot mark their own coupon redeemed.
 - Coupon validation scoped to the cashier's merchant. A successful redemption is recorded once and moves the coupon out of the active wallet.
 - Server-issued EcoID QR codes that expire after 45 seconds and can be used once. An authorized cashier scan awards 10 points to the associated account.
 - An administration dashboard for aggregate operational metrics and cashier provisioning.
@@ -84,7 +88,7 @@ In development, the default initial password is `Viladecans`. In production, con
 python -m pytest -q
 ```
 
-The API tests cover account isolation, cashier permissions, coupon redemption, one-time EcoID issuance and scanning, expiration, and cashier dashboard metrics.
+The API tests cover account isolation, cashier permissions, coupon redemption, one-time EcoID issuance and scanning, expiration, server-derived badges and streaks, and cashier dashboard metrics.
 
 ## Docker
 

@@ -1,0 +1,25 @@
+.engagement-panel{margin-top:16px;padding:18px;border:1px solid #e5ebdc;border-radius:14px;background:#f7f9f2}
+.engagement-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:13px}
+.engagement-heading h2{margin:4px 0 0;font-size:16px;letter-spacing:-.4px}
+.engagement-count{padding:6px 9px;border-radius:7px;background:#e9eedf;color:#526942;font:10px 'DM Mono',monospace}
+.streak-card{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:11px 13px;border:1px solid #f1dfc5;border-radius:10px;background:#fff8ec;color:#a15b2c}
+.streak-card>i{width:19px;height:19px}
+.streak-card strong,.streak-card small{display:block}
+.streak-card strong{font-size:11px}
+.streak-card small{margin-top:3px;color:#806f5d;font-size:9px}
+.badge-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px}
+.badge-card{display:flex;min-width:0;flex-direction:column;align-items:flex-start;padding:11px;border:1px solid #e6eae1;border-radius:10px;background:#fff;color:#6f786f}
+.badge-card.earned{border-color:#dce8c8;background:#fbfff4;color:#243b2b}
+.badge-icon{display:grid;width:29px;height:29px;place-items:center;margin-bottom:8px;border-radius:9px;background:#f0f2ec;color:#889184}
+.badge-card.earned .badge-icon{background:#eaf3d7;color:#5e803e}
+.badge-icon i{width:16px;height:16px}
+.badge-card>strong{font-size:10px}
+.badge-card>small{min-height:27px;margin-top:4px;color:#737d72;font-size:8px;line-height:1.45}
+.badge-progress{margin-top:8px;color:#75806f;font:8px 'DM Mono',monospace}
+.badge-card.earned .badge-progress{color:#5a7e38}
+.map-directions{display:inline-flex;align-items:center;margin-top:9px;padding:8px 11px;border-radius:8px;background:#193e30;color:#fff;font-size:10px;font-weight:800;text-decoration:none}
+.map-directions:hover{background:#285542}
+.coupon-modal .scanner-status{line-height:1.55}
+.coupon-modal:has(#coupon-large-qr) .coupon-large-qr{margin:18px auto 10px}
+@media(max-width:900px){.badge-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:560px){.engagement-panel{padding:14px}.badge-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.engagement-heading h2{font-size:14px}}

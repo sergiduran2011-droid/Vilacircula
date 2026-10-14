@@ -12,6 +12,7 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse
@@ -30,6 +31,55 @@ from services import AnalyticsService
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATABASE = ROOT / "data" / "vilacircula.sqlite3"
 SCHOOLS = ("Goar", "Torre-roja", "Josep Mestres", "Miramar", "Olímpia", "Sales")
+LOCAL_TIMEZONE = ZoneInfo("Europe/Madrid")
+BADGE_RULES = (
+    {"id": "first-steps", "name": "Primeros pasos", "description": "Consigue tus primeros EcoPuntos.", "icon": "sprout", "target": 1, "metric": "points"},
+    {"id": "eco-100", "name": "Eco 100", "description": "Aporta 100 EcoPuntos a tu instituto.", "icon": "leaf", "target": 100, "metric": "points"},
+    {"id": "eco-500", "name": "Eco 500", "description": "Aporta 500 EcoPuntos a tu instituto.", "icon": "trees", "target": 500, "metric": "points"},
+    {"id": "streak-3", "name": "Constancia", "description": "Suma puntos durante 3 días seguidos.", "icon": "flame", "target": 3, "metric": "streak"},
+    {"id": "streak-7", "name": "Imparable", "description": "Suma puntos durante 7 días seguidos.", "icon": "trophy", "target": 7, "metric": "streak"},
+)
+
+
+def engagement_summary(activity_timestamps: list[str], contribution: int) -> dict[str, object]:
+    activity_days = set()
+    for value in activity_timestamps:
+        occurred_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if occurred_at.tzinfo is None:
+            occurred_at = occurred_at.replace(tzinfo=UTC)
+        activity_days.add(occurred_at.astimezone(LOCAL_TIMEZONE).date())
+    ordered_days = sorted(activity_days)
+    longest_streak = 0
+    streak = 0
+    previous_day = None
+    for day in ordered_days:
+        streak = streak + 1 if previous_day and (day - previous_day).days == 1 else 1
+        longest_streak = max(longest_streak, streak)
+        previous_day = day
+
+    today = datetime.now(LOCAL_TIMEZONE).date()
+    descending_days = sorted(activity_days, reverse=True)
+    current_streak = 0
+    if descending_days and 0 <= (today - descending_days[0]).days <= 1:
+        current_streak = 1
+        for newer, older in zip(descending_days, descending_days[1:]):
+            if (newer - older).days != 1:
+                break
+            current_streak += 1
+
+    badges = []
+    for rule in BADGE_RULES:
+        progress = contribution if rule["metric"] == "points" else longest_streak
+        badges.append({
+            **rule,
+            "progress": min(progress, rule["target"]),
+            "earned": progress >= rule["target"],
+        })
+    return {
+        "current_streak": current_streak,
+        "longest_streak": longest_streak,
+        "badges": badges,
+    }
 
 MERCHANTS = (
     {
@@ -931,6 +981,10 @@ def create_app(
                 "SELECT description, merchant, points, created_at FROM point_events WHERE profile_id = ? ORDER BY created_at DESC LIMIT 8",
                 (profile["id"],),
             ).fetchall()
+            activity_timestamps = connection.execute(
+                "SELECT created_at FROM point_events WHERE profile_id = ?",
+                (profile["id"],),
+            ).fetchall()
             personal_rank = connection.execute(
                 "SELECT COUNT(*) + 1 AS rank FROM profiles WHERE school = ? AND contribution > ?",
                 (profile["school"], profile["contribution"]),
@@ -946,6 +1000,10 @@ def create_app(
             "personal_rank": personal_rank,
             "school_points": next((row["points"] for row in board if row["school"] == profile["school"]), 0),
             "league": board,
+            "engagement": engagement_summary(
+                [row["created_at"] for row in activity_timestamps],
+                profile["contribution"],
+            ),
             "activity": [
                 {
                     "description": row["description"],

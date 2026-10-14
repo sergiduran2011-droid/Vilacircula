@@ -17,7 +17,7 @@
   document.querySelector('.topbar').after(status);
   const style = document.createElement('link');
   style.rel = 'stylesheet';
-  style.href = './api-client.css?v=20';
+  style.href = './api-client.css?v=21';
   document.head.append(style);
   const cashierStyle = document.createElement('link');
   cashierStyle.rel = 'stylesheet';
@@ -241,21 +241,10 @@
     window.applyCitizenProfile(value.display_name, value.school);
   }
 
-  function haversineDistance(first, second) {
-    const radians = Math.PI / 180;
-    const lat1 = first.latitude * radians;
-    const lat2 = second.latitude * radians;
-    const deltaLat = (second.latitude - first.latitude) * radians;
-    const deltaLon = (second.longitude - first.longitude) * radians;
-    const arc = Math.sin(deltaLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
-    return Math.round(6371000 * 2 * Math.atan2(Math.sqrt(arc), Math.sqrt(1 - arc)) / 50) * 50;
-  }
-
   function decorateMerchants(entries) {
-    const goar = { latitude: 41.3229755, longitude: 2.0066907 };
     return entries.map(merchant => ({
       ...merchant,
-      distance: merchant.latitude == null ? null : `${haversineDistance(goar, merchant)} m`
+      distance: merchant.latitude == null ? 'Sin ubicación' : 'Activa ubicación'
     }));
   }
 
@@ -275,19 +264,6 @@
     const existingRewardSummary = document.querySelector('.reward-summary');
     if (existingRewardSummary) existingRewardSummary.remove();
     document.querySelector('#screen-wallet .section-head')?.after(rewardSummary);
-    const engagement = document.createElement('div');
-    engagement.className = 'engagement-panel';
-    engagement.innerHTML = `
-      <h3>Desafíos para seguir sumando</h3>
-      <div class="engagement-list">
-        <div class="engagement-item"><strong>EcoRuta del día</strong><span>+10 pts</span></div>
-        <div class="engagement-item"><strong>Compra local</strong><span>+15 pts</span></div>
-        <div class="engagement-item"><strong>Reutiliza tu bolsa</strong><span>+8 pts</span></div>
-      </div>
-    `;
-    const existingEngagement = document.querySelector('.engagement-panel');
-    if (existingEngagement) existingEngagement.remove();
-    document.querySelector('#screen-wallet .coupon-list')?.after(engagement);
     setStatus('Perfil de este dispositivo · 150 puntos iniciales y ofertas de prueba. Comercios geolocalizados desde OpenStreetMap.', 'connected');
   }
 
@@ -963,6 +939,16 @@
         source.append(link);
       }
       detail.append(source);
+      detail.querySelector('.map-directions')?.remove();
+      if (!merchant.is_demo && merchant.latitude != null && merchant.longitude != null) {
+        const directions = document.createElement('a');
+        directions.className = 'map-directions';
+        directions.href = `https://www.openstreetmap.org/directions?to=${encodeURIComponent(`${merchant.latitude},${merchant.longitude}`)}`;
+        directions.target = '_blank';
+        directions.rel = 'noreferrer';
+        directions.textContent = 'Cómo llegar';
+        detail.append(directions);
+      }
     }, 0);
   });
 

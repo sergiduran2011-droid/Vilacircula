@@ -19,6 +19,10 @@
   styleLink.rel = 'stylesheet';
   styleLink.href = './viladecans.css';
   document.head.append(styleLink);
+  const featuresStyleLink = document.createElement('link');
+  featuresStyleLink.rel = 'stylesheet';
+  featuresStyleLink.href = './features.css?v=1';
+  document.head.append(featuresStyleLink);
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -107,6 +111,41 @@
     updateWelcomeDate();
   };
 
+  function renderEngagement(engagement) {
+    document.querySelector('.engagement-panel')?.remove();
+    const panel = document.createElement('section');
+    panel.className = 'engagement-panel';
+    const badges = engagement?.badges || [];
+    const earned = badges.filter(badge => badge.earned).length;
+    panel.innerHTML = `
+      <div class="engagement-heading">
+        <div><span class="eyebrow">TU PROGRESO</span><h2>Insignias y constancia</h2></div>
+        <span class="engagement-count">${earned}/${badges.length} insignias</span>
+      </div>
+      <div class="streak-card"><i data-lucide="flame"></i><div><strong>${engagement?.current_streak || 0} ${(engagement?.current_streak || 0) === 1 ? 'día' : 'días'} seguidos</strong><small>Racha actual · récord ${engagement?.longest_streak || 0} ${(engagement?.longest_streak || 0) === 1 ? 'día' : 'días'}</small></div></div>
+      <div class="badge-grid"></div>
+    `;
+    const badgeGrid = panel.querySelector('.badge-grid');
+    badges.forEach(badge => {
+      const card = document.createElement('article');
+      card.className = `badge-card${badge.earned ? ' earned' : ''}`;
+      const icon = document.createElement('span');
+      icon.className = 'badge-icon';
+      icon.innerHTML = `<i data-lucide="${badge.icon}"></i>`;
+      const name = document.createElement('strong');
+      name.textContent = badge.name;
+      const description = document.createElement('small');
+      description.textContent = badge.description;
+      const progress = document.createElement('span');
+      progress.className = 'badge-progress';
+      progress.textContent = badge.earned ? 'CONSEGUIDA' : `${badge.progress} / ${badge.target}`;
+      card.append(icon, name, description, progress);
+      badgeGrid.append(card);
+    });
+    document.querySelector('#screen-home .lower')?.after(panel);
+    window.lucide?.createIcons();
+  }
+
   window.setCitizenDashboard = dashboard => {
     state.balance = dashboard.balance;
     state.contribution = dashboard.contribution;
@@ -183,6 +222,8 @@
     document.querySelector('#screen-home .rank-pill').textContent = `#${dashboard.school_rank} DE ${dashboard.league.length}`;
     document.querySelector('#screen-home .school-stats span:last-child b').textContent = `#${dashboard.personal_rank}`;
     document.querySelector('#screen-league .personal .metrics > div:last-child strong').textContent = `#${dashboard.personal_rank}`;
+    document.querySelector('.school-note').textContent = 'Puntos sumados por instituto; el ranking no muestra datos personales.';
+    renderEngagement(dashboard.engagement);
     save();
   };
 
@@ -259,7 +300,7 @@
   function renderShopList() {
     const visible = shops.filter(shop => category === 'Todos' || shop.category === category);
     document.querySelector('#filters').innerHTML = categories.map(item => `<button class="chip ${item === category ? 'active' : ''}" data-category="${item}">${item}</button>`).join('');
-    document.querySelector('#merchant-list').innerHTML = visible.map(shop => `<button class="merchant ${chosen?.name === shop.name ? 'selected' : ''}" data-shop="${shop.name}"><span class="merchant-logo">${shop.initials}</span><span class="merchant-info"><strong>${shop.name}</strong><small>${shop.is_demo ? 'Ejemplo · no confirmado' : `${shop.type} · ${shop.address}`}</small></span><span class="distance">${shop.distance || '—'}</span></button>`).join('');
+    document.querySelector('#merchant-list').innerHTML = visible.map(shop => `<button class="merchant ${chosen?.name === shop.name ? 'selected' : ''}" data-shop="${shop.name}"><span class="merchant-logo">${shop.initials}</span><span class="merchant-info"><strong>${shop.name}</strong><small>${shop.is_demo ? 'Ejemplo · no confirmado' : `${shop.type} · ${shop.address}`}</small></span><span class="distance">${shop.distance || (shop.latitude == null ? 'Sin ubicación' : 'Activa ubicación')}</span></button>`).join('');
     renderShopPins();
   }
 
@@ -320,7 +361,9 @@
       scanButton = document.createElement('button');
       scanButton.id = 'scan-coupon';
       scanButton.className = 'scan-coupon';
-      scanButton.innerHTML = '<i data-lucide="scan-qr-code"></i>Escanear cupón';
+      scanButton.innerHTML = window.apiCouponStatus
+        ? '<i data-lucide="store"></i>Validación en caja'
+        : '<i data-lucide="scan-qr-code"></i>Escanear cupón';
       count.parentElement.append(scanButton);
     }
     document.querySelector('#coupons').innerHTML = state.coupons.length
@@ -443,16 +486,17 @@
 
   function openCoupon(code = null) {
     const coupon = code ? state.coupons.find(item => item.code === code) : null;
+    const merchantValidationOnly = typeof window.apiCouponStatus === 'function';
     const modal = document.createElement('div');
     modal.id = 'coupon-modal';
     modal.className = 'modal-backdrop';
-    modal.innerHTML = `<section class="modal coupon-modal" role="dialog" aria-modal="true" aria-labelledby="coupon-modal-title"><button class="icon-button modal-close" id="close-coupon" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">MONEDERO VILACIRCULA</span><h2 id="coupon-modal-title">${coupon ? coupon.name : 'Escanea un cupón'}</h2><p>${coupon ? `${coupon.store} · Código de un solo uso` : 'Lee el QR de un cupón activo para marcarlo como canjeado.'}</p>${coupon ? `<div class="coupon-large-qr" id="coupon-large-qr"></div><div class="coupon-large-code">${coupon.code}</div>` : ''}<div class="scanner-preview" id="scanner-preview" hidden><video id="coupon-video" playsinline muted></video><span class="scan-frame"></span></div><p class="scanner-status" id="scanner-status">${coupon ? 'Muestra este QR al comercio o escanea aquí un vale activo.' : 'La cámara solo se usa para leer el QR de un cupón.'}</p><div class="coupon-modal-actions"><button class="primary" id="start-coupon-scan"><i data-lucide="scan-line"></i>Escanear con cámara</button>${coupon ? '<button class="redeem" id="simulate-coupon-scan">Simular escaneo</button>' : ''}</div></section>`;
+    modal.innerHTML = `<section class="modal coupon-modal" role="dialog" aria-modal="true" aria-labelledby="coupon-modal-title"><button class="icon-button modal-close" id="close-coupon" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">MONEDERO VILACIRCULA</span><h2 id="coupon-modal-title">${coupon ? coupon.name : merchantValidationOnly ? 'Canje en el comercio' : 'Escanea un cupón'}</h2><p>${coupon ? `${coupon.store} · Código de un solo uso` : merchantValidationOnly ? 'El personal del comercio valida el cupón desde su caja. No marques tu propio vale como canjeado.' : 'Lee el QR de un cupón activo para marcarlo como canjeado.'}</p>${coupon ? `<div class="coupon-large-qr" id="coupon-large-qr"></div><div class="coupon-large-code">${coupon.code}</div>` : ''}${merchantValidationOnly ? '' : '<div class="scanner-preview" id="scanner-preview" hidden><video id="coupon-video" playsinline muted></video><span class="scan-frame"></span></div>'}<p class="scanner-status" id="scanner-status">${coupon ? merchantValidationOnly ? 'Muestra este QR en la caja. El estado se actualizará cuando el comercio lo valide.' : 'Muestra este QR al comercio o escanea aquí un vale activo.' : merchantValidationOnly ? '' : 'La cámara solo se usa para leer el QR de un cupón.'}</p>${merchantValidationOnly ? '' : `<div class="coupon-modal-actions"><button class="primary" id="start-coupon-scan"><i data-lucide="scan-line"></i>Escanear con cámara</button>${coupon ? '<button class="redeem" id="simulate-coupon-scan">Simular escaneo</button>' : ''}</div>`}</section>`;
     document.querySelector('#modal-root').append(modal);
     icons();
     if (coupon) fillQr(document.querySelector('#coupon-large-qr'), couponPayload(coupon.code), 202);
     modal.addEventListener('click', event => { if (event.target === modal) closeCouponModal(); });
     document.querySelector('#close-coupon').addEventListener('click', closeCouponModal);
-    document.querySelector('#start-coupon-scan').addEventListener('click', startCameraScan);
+    document.querySelector('#start-coupon-scan')?.addEventListener('click', startCameraScan);
     document.querySelector('#simulate-coupon-scan')?.addEventListener('click', () => markRedeemed(coupon.code));
     if (coupon && window.apiCouponStatus) {
       couponWatchTimer = setInterval(async () => {

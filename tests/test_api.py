@@ -1,5 +1,7 @@
 import hashlib
 import sqlite3
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
@@ -54,6 +56,38 @@ def test_profile_has_no_email_and_is_stored_in_sqlite(tmp_path):
     assert stored.json()["password_setup_required"] is False
     assert dashboard.json()["balance"] == 150
     assert dashboard.json()["steps"]["is_demo"] is True
+
+
+def test_dashboard_reports_streaks_and_server_derived_badges(tmp_path):
+    database_path = tmp_path / "test.sqlite3"
+    with make_client(tmp_path) as client:
+        profile, headers = create_profile(client)
+        today = datetime.now(ZoneInfo("Europe/Madrid")).date()
+        with sqlite3.connect(database_path) as connection:
+            for days_ago in (2, 1, 0):
+                occurred_at = datetime.combine(
+                    today - timedelta(days=days_ago),
+                    time(12),
+                    tzinfo=ZoneInfo("Europe/Madrid"),
+                ).isoformat()
+                connection.execute(
+                    "INSERT INTO point_events (id, profile_id, description, merchant, points, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (f"event-{days_ago}", profile["id"], "EcoID validado en caja", "Café Marco", 10, occurred_at),
+                )
+            connection.execute(
+                "UPDATE profiles SET contribution = 30 WHERE id = ?",
+                (profile["id"],),
+            )
+        dashboard = client.get("/api/v1/dashboard", headers=headers).json()
+
+    engagement = dashboard["engagement"]
+    assert engagement["current_streak"] == 3
+    assert engagement["longest_streak"] == 3
+    badges = {badge["id"]: badge for badge in engagement["badges"]}
+    assert badges["first-steps"]["earned"] is True
+    assert badges["streak-3"]["earned"] is True
+    assert badges["streak-7"]["earned"] is False
+    assert badges["eco-100"]["progress"] == 30
 
 
 def test_profile_requires_valid_school_and_authorization(tmp_path):
