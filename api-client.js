@@ -17,7 +17,7 @@
   document.querySelector('.topbar').after(status);
   const style = document.createElement('link');
   style.rel = 'stylesheet';
-  style.href = './api-client.css?v=17';
+  style.href = './api-client.css?v=18';
   document.head.append(style);
   const cashierStyle = document.createElement('link');
   cashierStyle.rel = 'stylesheet';
@@ -381,7 +381,7 @@
     });
   }
 
-  async function initializeGoogleButton(overlay) {
+  async function initializeGoogleButton(overlay, linkCurrentSession) {
     const error = overlay.querySelector('#google-auth-error');
     try {
       const config = await request('/auth/google/config');
@@ -437,7 +437,7 @@
     document.querySelector('#modal-root').append(overlay);
     window.lucide?.createIcons();
     overlay.addEventListener('click', event => { if (event.target === overlay && token) closeProfileDialog(); });
-    initializeGoogleButton(overlay);
+    initializeGoogleButton(overlay, linkCurrentSession);
   }
 
   function openProfileDialog() {
