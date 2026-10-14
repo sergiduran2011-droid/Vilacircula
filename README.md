@@ -45,7 +45,14 @@ For local development, create a `.env` file or export environment variables in y
 | `VILACIRCULA_INITIAL_CASHIER_PASSWORD` | Initial password for seeded cashier accounts. Set a strong temporary value and change it after first login. |
 | `VILACIRCULA_ALLOW_SELF_REDEEM` | Enables resident self-redemption. Keep this `0` in production so merchants validate coupons. |
 | `VILACIRCULA_MERCHANT_KEY` | Optional merchant integration secret. |
+| `VILACIRCULA_GOOGLE_CLIENT_ID` | Google OAuth web client ID used for resident sign-in. Configure the same ID in the web app and backend environment. |
 | `HOST`, `PORT` | Bind address and port. Defaults are `0.0.0.0` and `8000` in the production entry point. |
+
+### Google sign-in
+
+Create a **Web application** OAuth client in Google Cloud Console and add the frontend origins under **Authorized JavaScript origins** (for the hosted app: `https://sergiduran2011-droid.github.io`; locally: `http://localhost:8001`). Set its client ID as `VILACIRCULA_GOOGLE_CLIENT_ID` in the API environment (Render) and in local development. No Google client secret is used by the frontend.
+
+Residents with an existing VilaCircula account can sign in with Google once and verify their current username and password to link it. Existing sessions also offer a way to link the current profile. Google ID tokens are verified by the API before a session is issued. The API adds the nullable Google identity field to existing databases without removing profiles or their balances.
 
 For a local PostgreSQL database, for example:
 

@@ -8,18 +8,34 @@ from app import create_app
 
 def make_client(tmp_path, **options):
     database_path = options.pop("database_path", tmp_path / "test.sqlite3")
-    return TestClient(create_app(database_path, **options))
+    google_client_id = options.pop("google_client_id", "test-google-client-id")
+    client = TestClient(create_app(database_path, google_client_id=google_client_id, **options))
+
+    def fake_google_verifier(credential, client_id):
+        if credential == "invalid":
+            raise ValueError("Invalid Google ID token")
+        username = credential.removeprefix("google:")
+        return {
+            "sub": credential,
+            "email": f"{username}@example.com",
+            "email_verified": credential != "unverified",
+            "name": username.title(),
+        }
+
+    client.app.state.google_token_verifier = fake_google_verifier
+    return client
 
 
 def create_profile(client, username="sergi"):
-    response = client.post("/api/v1/profiles", json={
+    response = client.post("/api/v1/auth/google", json={
+        "credential": f"google:{username}",
         "display_name": "Sergi",
         "school": "Goar",
-        "username": username,
-        "password": "clave-segura-123",
     })
-    assert response.status_code == 201
-    body = response.json()
+    assert response.status_code == 200
+    result = response.json()
+    profile = result["profile"]
+    body = {**profile, "profile": profile, "token": result["token"]}
     return body, {"Authorization": f"Bearer {body['token']}"}
 
 
@@ -42,26 +58,74 @@ def test_profile_has_no_email_and_is_stored_in_sqlite(tmp_path):
 
 def test_profile_requires_valid_school_and_authorization(tmp_path):
     with make_client(tmp_path) as client:
-        invalid_school = client.post("/api/v1/profiles", json={"display_name": "Sergi", "school": "Otro", "username": "sergi", "password": "clave-segura-123"})
+        invalid_school = client.post("/api/v1/auth/google", json={"credential": "google:invalid-school", "display_name": "Sergi", "school": "Otro"})
         unauthorized = client.get("/api/v1/dashboard")
 
     assert invalid_school.status_code == 422
     assert unauthorized.status_code == 401
 
 
-def test_username_login_is_case_insensitive_and_accounts_are_isolated(tmp_path):
+def test_google_login_and_legacy_password_endpoints(tmp_path):
     with make_client(tmp_path) as client:
         first, _ = create_profile(client)
         second, _ = create_profile(client, "segon")
-        login = client.post("/api/v1/auth/login", json={"username": "SERGI", "password": "clave-segura-123"})
-        wrong_password = client.post("/api/v1/auth/login", json={"username": "sergi", "password": "otra-clave-larga"})
-        duplicate_username = client.post("/api/v1/profiles", json={"display_name": "Otra", "school": "Goar", "username": "sergi", "password": "clave-segura-123"})
+        login = client.post("/api/v1/auth/google", json={"credential": "google:sergi"})
+        password_login = client.post("/api/v1/auth/login", json={"username": "sergi", "password": "otra-clave-larga"})
+        password_registration = client.post("/api/v1/profiles", json={"display_name": "Otra", "school": "Goar", "username": "otra", "password": "clave-segura-123"})
 
     assert first["id"] != second["id"]
     assert login.status_code == 200
     assert login.json()["profile"]["id"] == first["id"]
+    assert password_login.status_code == 410
+    assert password_registration.status_code == 410
+
+
+def test_google_login_rejects_invalid_and_unverified_id_tokens(tmp_path):
+    with make_client(tmp_path) as client:
+        invalid = client.post("/api/v1/auth/google", json={"credential": "invalid"})
+        unverified = client.post("/api/v1/auth/google", json={"credential": "unverified"})
+
+    assert invalid.status_code == 401
+    assert unverified.status_code == 401
+
+
+def test_google_login_requires_server_client_id(tmp_path):
+    with make_client(tmp_path, google_client_id="") as client:
+        config = client.get("/api/v1/auth/google/config")
+        login = client.post("/api/v1/auth/google", json={"credential": "google:sergi"})
+
+    assert config.json()["client_id"] == ""
+    assert login.status_code == 503
+
+
+def test_google_sign_in_links_existing_profile_with_current_credentials(tmp_path):
+    with make_client(tmp_path) as client:
+        created, _ = create_profile(client)
+        headers = {"Authorization": f"Bearer {created['token']}"}
+        credentials = client.put(
+            "/api/v1/account/credentials",
+            json={"username": "sergi.actual", "password": "clave-segura-123"},
+            headers=headers,
+        )
+        with sqlite3.connect(client.app.state.database_path) as connection:
+            connection.execute("UPDATE profiles SET google_sub = NULL WHERE id = ?", (created["profile"]["id"],))
+        unlinked = client.post("/api/v1/auth/google", json={"credential": "google:sergi-new"})
+        wrong_password = client.post("/api/v1/auth/google", json={
+            "credential": "google:sergi-new",
+            "username": "sergi.actual",
+            "password": "incorrecta",
+        })
+        linked = client.post("/api/v1/auth/google", json={
+            "credential": "google:sergi-new",
+            "username": "sergi.actual",
+            "password": "clave-segura-123",
+        })
+
+    assert credentials.status_code == 200
+    assert unlinked.json()["link_required"] is True
     assert wrong_password.status_code == 401
-    assert duplicate_username.status_code == 409
+    assert linked.status_code == 200
+    assert linked.json()["profile"]["id"] == created["profile"]["id"]
 
 
 def test_password_change_rotates_token_and_preserves_the_account(tmp_path):
@@ -69,7 +133,7 @@ def test_password_change_rotates_token_and_preserves_the_account(tmp_path):
         profile, headers = create_profile(client)
         changed = client.put("/api/v1/account/credentials", json={"username": "sergi.nou", "password": "una-clave-nueva-123", "current_password": "clave-segura-123"}, headers=headers)
         old_session = client.get("/api/v1/profile", headers=headers)
-        login = client.post("/api/v1/auth/login", json={"username": "sergi.nou", "password": "una-clave-nueva-123"})
+        login = client.post("/api/v1/auth/google", json={"credential": "google:sergi"})
 
     assert changed.status_code == 200
     assert changed.json()["token"] != profile["token"]
@@ -254,20 +318,18 @@ def test_legacy_profile_and_coupon_migrate_without_losing_balance(tmp_path):
 
     with make_client(tmp_path, database_path=database) as client:
         legacy_headers = {"Authorization": f"Bearer {old_token}"}
-        migrated = client.get("/api/v1/profile", headers=legacy_headers)
-        wallet = client.get("/api/v1/coupons", headers=legacy_headers)
-        credentials = client.put("/api/v1/account/credentials", json={"username": "sergi.legacy", "password": "legacy-password-123"}, headers=legacy_headers)
+        blocked_until_google_linked = client.get("/api/v1/profile", headers=legacy_headers)
+        link_status = client.get("/api/v1/auth/google/link-status", headers=legacy_headers)
+        new_login = client.post("/api/v1/auth/google/link", json={"credential": "google:sergi"}, headers=legacy_headers)
+        wallet = client.get("/api/v1/coupons", headers={"Authorization": f"Bearer {new_login.json()['token']}"})
         revoked_legacy = client.get("/api/v1/profile", headers=legacy_headers)
-        new_login = client.post("/api/v1/auth/login", json={"username": "sergi.legacy", "password": "legacy-password-123"})
         new_balance = client.get("/api/v1/profile", headers={"Authorization": f"Bearer {new_login.json()['token']}"})
 
-    assert migrated.status_code == 200
-    assert migrated.json()["password_setup_required"] is True
-    assert migrated.json()["balance"] == 275
-    assert wallet.json()["active"][0]["code"] == "VC-LEGACY1"
-    assert credentials.status_code == 200
-    assert revoked_legacy.status_code == 401
+    assert blocked_until_google_linked.status_code == 403
+    assert link_status.json()["link_required"] is True
     assert new_login.status_code == 200
+    assert wallet.json()["active"][0]["code"] == "VC-LEGACY1"
+    assert revoked_legacy.status_code == 401
     assert new_balance.json()["balance"] == 275
 
 
@@ -347,7 +409,7 @@ def test_admin_can_review_audit_log_and_security_headers_are_present(tmp_path, m
     monkeypatch.setenv("VILACIRCULA_ENV", "production")
     with make_client(tmp_path, admin_key="municipal-secret") as client:
         _, headers = create_profile(client)
-        _ = client.post("/api/v1/auth/login", json={"username": "sergi", "password": "clave-segura-123"}, headers=headers)
+        _ = client.post("/api/v1/auth/google", json={"credential": "google:sergi"})
         health = client.get("/api/v1/health")
         audit = client.get("/api/v1/admin/audit", headers={"X-Admin-Key": "municipal-secret"})
 

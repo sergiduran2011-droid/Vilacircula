@@ -42,6 +42,7 @@ class AppConfig:
     self_redeem_enabled: bool
     allowed_origins: list[str]
     initial_cashier_password: str
+    google_client_id: str
 
     @classmethod
     def from_env(
@@ -51,6 +52,7 @@ class AppConfig:
         merchant_key: str | None = None,
         allow_self_redeem: bool | None = None,
         admin_key: str | None = None,
+        google_client_id: str | None = None,
         environment: str | None = None,
     ) -> "AppConfig":
         db_path = Path(database_path or os.getenv("VILACIRCULA_DATABASE", DEFAULT_DATABASE))
@@ -85,6 +87,10 @@ class AppConfig:
         if "*" in allowed_origins:
             allowed_origins = ["*"]
         initial_cashier_password = os.getenv("VILACIRCULA_INITIAL_CASHIER_PASSWORD", "" if production else "Viladecans")
+        configured_google_client_id = (
+            google_client_id if google_client_id is not None
+            else os.getenv("VILACIRCULA_GOOGLE_CLIENT_ID", "")
+        ).strip()
         return cls(
             database_path=db_path,
             database_url=database_url,
@@ -95,4 +101,5 @@ class AppConfig:
             self_redeem_enabled=self_redeem_enabled,
             allowed_origins=allowed_origins,
             initial_cashier_password=initial_cashier_password,
+            google_client_id=configured_google_client_id,
         )

@@ -5,3 +5,4 @@ pytest>=8,<9
 gunicorn>=23,<24
 psycopg[binary]>=3.2,<4
 alembic>=1.14,<2
+google-auth[requests]>=2.32,<3

@@ -17,6 +17,7 @@ DEFAULT_DATABASE = ROOT / "data" / "vilacircula.sqlite3"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS profiles (
     id TEXT PRIMARY KEY,
+    google_sub TEXT,
     display_name TEXT NOT NULL,
     school TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
@@ -109,6 +110,9 @@ def seed_database(db_path: Path, *, initial_cashier_password: str, production: b
     with closing(connect_database(db_path)) as connection:
         connection.executescript(SCHEMA)
         profile_columns = {row["name"] for row in connection.execute("PRAGMA table_info(profiles)")}
+        if "google_sub" not in profile_columns:
+            connection.execute("ALTER TABLE profiles ADD COLUMN google_sub TEXT")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS profiles_google_sub_idx ON profiles(google_sub) WHERE google_sub IS NOT NULL")
         if "username" not in profile_columns:
             connection.execute("ALTER TABLE profiles ADD COLUMN username TEXT")
         if "password_hash" not in profile_columns:

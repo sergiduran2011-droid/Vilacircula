@@ -17,6 +17,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from google.auth.exceptions import GoogleAuthError
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 
@@ -110,6 +113,7 @@ CASHIER_SEEDS = (
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS profiles (
     id TEXT PRIMARY KEY,
+    google_sub TEXT,
     display_name TEXT NOT NULL,
     school TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
@@ -220,13 +224,6 @@ CREATE INDEX IF NOT EXISTS eco_id_tokens_profile_created_idx ON eco_id_tokens(pr
 """
 
 
-class ProfileCreate(BaseModel):
-    display_name: str = Field(min_length=1, max_length=32)
-    school: str = Field(min_length=1, max_length=40)
-    username: str = Field(min_length=3, max_length=24, pattern=r"^[A-Za-z0-9._-]+$")
-    password: str = Field(min_length=10, max_length=128)
-
-
 class ProfileUpdate(BaseModel):
     display_name: str = Field(min_length=1, max_length=32)
     school: str = Field(min_length=1, max_length=40)
@@ -235,6 +232,14 @@ class ProfileUpdate(BaseModel):
 class LoginPayload(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=1, max_length=128)
+
+
+class GoogleAuthPayload(BaseModel):
+    credential: str = Field(min_length=1, max_length=8192)
+    username: str | None = Field(default=None, min_length=3, max_length=24, pattern=r"^[A-Za-z0-9._-]+$")
+    password: str | None = Field(default=None, min_length=1, max_length=128)
+    display_name: str | None = Field(default=None, min_length=1, max_length=32)
+    school: str | None = Field(default=None, min_length=1, max_length=40)
 
 
 class CredentialsUpdate(BaseModel):
@@ -305,6 +310,11 @@ def token_digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def verify_google_id_token(credential: str, client_id: str) -> dict[str, object]:
+    claims = google_id_token.verify_oauth2_token(credential, GoogleAuthRequest(), client_id)
+    return claims
+
+
 def timestamp() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -330,7 +340,8 @@ def public_profile(profile: sqlite3.Row) -> dict[str, object]:
         "username": profile["username"],
         "balance": profile["balance"],
         "contribution": profile["contribution"],
-        "password_setup_required": profile["password_hash"] is None,
+        "password_setup_required": profile["password_hash"] is None and profile["google_sub"] is None,
+        "has_password": profile["password_hash"] is not None,
         "is_demo": True,
     }
 
@@ -353,12 +364,14 @@ def create_app(
     merchant_key: str | None = None,
     allow_self_redeem: bool | None = None,
     admin_key: str | None = None,
+    google_client_id: str | None = None,
 ) -> FastAPI:
     config = AppConfig.from_env(
         database_path=database_path,
         merchant_key=merchant_key,
         allow_self_redeem=allow_self_redeem,
         admin_key=admin_key,
+        google_client_id=google_client_id,
     )
     db_path = config.database_path
     key = config.merchant_key
@@ -377,6 +390,7 @@ def create_app(
     with closing(connect()) as connection:
         connection.executescript(SCHEMA)
         if is_postgres_url(config.database_url):
+            connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS google_sub TEXT")
             connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS username TEXT")
             connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS password_hash TEXT")
             connection.execute("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS merchant_id TEXT REFERENCES merchants(id)")
@@ -384,6 +398,8 @@ def create_app(
         else:
             profile_columns = {row["name"] for row in connection.execute("PRAGMA table_info(profiles)")}
             coupon_columns = {row["name"] for row in connection.execute("PRAGMA table_info(coupons)")}
+        if not is_postgres_url(config.database_url) and "google_sub" not in profile_columns:
+            connection.execute("ALTER TABLE profiles ADD COLUMN google_sub TEXT")
         if not is_postgres_url(config.database_url) and "username" not in profile_columns:
             connection.execute("ALTER TABLE profiles ADD COLUMN username TEXT")
         if not is_postgres_url(config.database_url) and "password_hash" not in profile_columns:
@@ -393,6 +409,7 @@ def create_app(
         if not is_postgres_url(config.database_url) and "redeemed_by" not in coupon_columns:
             connection.execute("ALTER TABLE coupons ADD COLUMN redeemed_by TEXT REFERENCES cashier_users(id)")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS profiles_username_idx ON profiles(username) WHERE username IS NOT NULL")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS profiles_google_sub_idx ON profiles(google_sub) WHERE google_sub IS NOT NULL")
         legacy_profiles = connection.execute("SELECT id, display_name, token_hash, username, password_hash FROM profiles").fetchall()
         for legacy in legacy_profiles:
             if not legacy["username"]:
@@ -428,6 +445,8 @@ def create_app(
     app.state.database_path = db_path
     app.state.database_backend = "postgresql" if is_postgres_url(config.database_url) else "sqlite"
     app.state.config = config
+    app.state.google_client_id = config.google_client_id
+    app.state.google_token_verifier = verify_google_id_token
     app.state.demo = not production
     app.state.production = production
     app.state.self_redeem_enabled = self_redeem_enabled
@@ -535,7 +554,7 @@ def create_app(
         with closing(connect()) as connection:
             connection.execute("DELETE FROM login_attempts WHERE username = ? AND client_ip = ?", (username, client_ip))
 
-    def current_profile(
+    def profile_for_google_link(
         credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     ) -> sqlite3.Row:
         if credentials is None or credentials.scheme.lower() != "bearer":
@@ -551,6 +570,14 @@ def create_app(
         if datetime.fromisoformat(profile["session_expires_at"]) <= datetime.now(UTC):
             log_event("auth_error", event_type="expired_session", profile_id=profile["id"], expires_at=profile["session_expires_at"])
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="La sesión ha caducado. Inicia sesión otra vez.")
+        return profile
+
+    def current_profile(
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    ) -> sqlite3.Row:
+        profile = profile_for_google_link(credentials)
+        if profile["google_sub"] is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Vincula una cuenta de Google para continuar.")
         return profile
 
     def current_cashier(
@@ -617,60 +644,158 @@ def create_app(
             "allowed_origins": allowed_origins,
         }
 
-    @app.post("/api/v1/profiles", status_code=status.HTTP_201_CREATED)
-    def create_profile(payload: ProfileCreate) -> dict[str, object]:
-        display_name = payload.display_name.strip()
-        school = payload.school.strip()
-        username = normalize_username(payload.username)
-        if not display_name:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Escribe tu nombre o apodo.")
-        if school not in SCHOOLS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Selecciona un instituto de Viladecans.")
-        profile_id = str(uuid.uuid4())
-        with closing(connect()) as connection:
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    "INSERT INTO profiles (id, display_name, school, token_hash, balance, contribution, created_at, username, password_hash) VALUES (?, ?, ?, ?, 150, 0, ?, ?, ?)",
-                    (profile_id, display_name, school, token_digest(secrets.token_urlsafe(32)), timestamp(), username, hash_password(payload.password)),
-                )
-                token = issue_session("citizen", profile_id, connection)
-                connection.commit()
-            except sqlite3.IntegrityError as error:
-                connection.rollback()
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ese nombre de usuario ya está ocupado.") from error
+    def verified_google_claims(credential: str, request: Request) -> tuple[str, str, str]:
+        if not config.google_client_id:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="El inicio de sesión con Google todavía no está configurado.")
+        try:
+            claims = app.state.google_token_verifier(credential, config.google_client_id)
+        except (GoogleAuthError, ValueError) as error:
+            log_event("auth_error", event_type="invalid_google_credential", client_ip=request.client.host if request.client else "unknown")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No se pudo verificar tu cuenta de Google.") from error
+        google_sub = claims.get("sub")
+        email = claims.get("email")
+        email_verified = claims.get("email_verified")
+        google_name = claims.get("name")
+        if not isinstance(google_sub, str) or not google_sub or not isinstance(email, str) or email_verified not in (True, "true"):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google no confirmó una cuenta de correo válida.")
+        return google_sub, email, google_name if isinstance(google_name, str) else ""
+
+    @app.get("/api/v1/auth/google/link-status")
+    def google_link_status(profile: sqlite3.Row = Depends(profile_for_google_link)) -> dict[str, object]:
         return {
-            "id": profile_id,
-            "display_name": display_name,
-            "school": school,
-            "username": username,
-            "balance": 150,
-            "contribution": 0,
-            "token": token,
-            "is_demo": True,
+            "link_required": profile["google_sub"] is None,
+            "display_name": profile["display_name"],
+            "school": profile["school"],
         }
 
-    @app.post("/api/v1/auth/login")
-    def login(payload: LoginPayload, request: Request) -> dict[str, object]:
-        username = normalize_username(payload.username)
-        client_ip = request.client.host if request.client else "unknown"
+    @app.post("/api/v1/auth/google/link")
+    def link_google_to_current_profile(
+        payload: GoogleAuthPayload,
+        request: Request,
+        profile: sqlite3.Row = Depends(profile_for_google_link),
+    ) -> dict[str, object]:
         if is_rate_limited(rate_limit_key_for_ip(request), limit=12, window_seconds=60):
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Demasiados intentos. Espera un momento antes de probar otra vez.")
-        if login_is_locked(username, client_ip):
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Demasiados intentos. Prueba de nuevo en 15 minutos.")
+        google_sub, email, _ = verified_google_claims(payload.credential, request)
         with closing(connect()) as connection:
-            profile = connection.execute("SELECT * FROM profiles WHERE username = ?", (username,)).fetchone()
-        password_hash = profile["password_hash"] if profile else None
-        password_valid = verify_password(payload.password, password_hash or dummy_password_hash)
-        if profile is None or not password_hash or not password_valid:
-            record_login_failure(username, client_ip)
-            add_audit_event("login_failed", actor_type="citizen", actor_id=username, target_type="profile", target_id=profile["id"] if profile else None, message="Login fallido", metadata={"username": username, "client_ip": client_ip})
-            log_event("auth_error", event_type="login_failed", username=username, client_ip=client_ip)
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario o contraseña incorrectos.")
-        clear_login_failures(username, client_ip)
-        with closing(connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute("SELECT google_sub FROM profiles WHERE id = ?", (profile["id"],)).fetchone()
+            if current is None or current["google_sub"] is not None:
+                connection.rollback()
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Este perfil ya tiene una cuenta de Google vinculada.")
+            try:
+                connection.execute("UPDATE profiles SET google_sub = ? WHERE id = ? AND google_sub IS NULL", (google_sub, profile["id"]))
+            except sqlite3.IntegrityError as error:
+                connection.rollback()
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esta cuenta de Google ya está vinculada a otro perfil.") from error
+            connection.execute("DELETE FROM auth_sessions WHERE profile_id = ?", (profile["id"],))
             token = issue_session("citizen", profile["id"], connection)
-        add_audit_event("login_success", actor_type="citizen", actor_id=profile["id"], target_type="profile", target_id=profile["id"], message="Login correcto", metadata={"username": username, "client_ip": client_ip})
+            updated_profile = connection.execute("SELECT * FROM profiles WHERE id = ?", (profile["id"],)).fetchone()
+            connection.commit()
+        add_audit_event(
+            "google_account_linked",
+            actor_type="citizen",
+            actor_id=profile["id"],
+            target_type="profile",
+            target_id=profile["id"],
+            message="Cuenta de Google vinculada desde una sesión existente",
+            metadata={"email": email},
+        )
+        return {"token": token, "profile": public_profile(updated_profile)}
+
+    @app.post("/api/v1/profiles", status_code=status.HTTP_201_CREATED)
+    def create_profile() -> dict[str, object]:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Crea tu cuenta con Google desde la pantalla de acceso.")
+
+    @app.post("/api/v1/auth/login")
+    def login() -> dict[str, object]:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="El acceso con usuario y contraseña ya no está disponible. Inicia sesión con Google.")
+
+    @app.get("/api/v1/auth/google/config")
+    def google_auth_config() -> dict[str, str]:
+        return {"client_id": config.google_client_id}
+
+    @app.post("/api/v1/auth/google")
+    def google_login(payload: GoogleAuthPayload, request: Request) -> dict[str, object]:
+        if is_rate_limited(rate_limit_key_for_ip(request), limit=12, window_seconds=60):
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Demasiados intentos. Espera un momento antes de probar otra vez.")
+        google_sub, email, google_name = verified_google_claims(payload.credential, request)
+
+        with closing(connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            profile = connection.execute("SELECT * FROM profiles WHERE google_sub = ?", (google_sub,)).fetchone()
+            if profile is not None:
+                token = issue_session("citizen", profile["id"], connection)
+                connection.commit()
+                return {"token": token, "profile": public_profile(profile)}
+
+            linking_existing = payload.username is not None or payload.password is not None
+            creating_profile = payload.display_name is not None or payload.school is not None
+            if linking_existing and creating_profile:
+                connection.rollback()
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Elige vincular tu perfil actual o crear uno nuevo.")
+            if linking_existing:
+                if not payload.username or not payload.password:
+                    connection.rollback()
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Escribe el usuario y la contraseña de tu perfil actual.")
+                existing = connection.execute(
+                    "SELECT * FROM profiles WHERE username = ?",
+                    (normalize_username(payload.username),),
+                ).fetchone()
+                password_hash = existing["password_hash"] if existing else None
+                if existing is None or existing["google_sub"] or not password_hash or not verify_password(payload.password, password_hash):
+                    connection.rollback()
+                    log_event("auth_error", event_type="google_account_link_failed", client_ip=request.client.host if request.client else "unknown")
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No se pudo vincular el perfil. Comprueba tu usuario y contraseña.")
+                profile_id = existing["id"]
+                try:
+                    connection.execute("UPDATE profiles SET google_sub = ? WHERE id = ?", (google_sub, profile_id))
+                except sqlite3.IntegrityError as error:
+                    connection.rollback()
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esta cuenta de Google ya está vinculada a otro perfil.") from error
+            elif creating_profile:
+                display_name = (payload.display_name or str(google_name or "")).strip()
+                school = (payload.school or "").strip()
+                if not display_name or school not in SCHOOLS:
+                    connection.rollback()
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Escribe tu nombre y selecciona un instituto de Viladecans.")
+                email_name = email.split("@", 1)[0]
+                base_username = re.sub(r"[^a-z0-9._-]+", "", normalize_username(email_name))[:18].strip("._-")
+                base_username = base_username if len(base_username) >= 3 else f"eco{google_sub[:8].lower()}"
+                username = base_username
+                suffix = 1
+                while connection.execute("SELECT 1 FROM profiles WHERE username = ?", (username,)).fetchone():
+                    suffix_text = f"-{suffix}"
+                    username = f"{base_username[:24 - len(suffix_text)]}{suffix_text}"
+                    suffix += 1
+                profile_id = str(uuid.uuid4())
+                try:
+                    connection.execute(
+                        "INSERT INTO profiles (id, google_sub, display_name, school, token_hash, balance, contribution, created_at, username, password_hash) VALUES (?, ?, ?, ?, ?, 150, 0, ?, ?, NULL)",
+                        (profile_id, google_sub, display_name[:32], school, token_digest(secrets.token_urlsafe(32)), timestamp(), username),
+                    )
+                except sqlite3.IntegrityError as error:
+                    connection.rollback()
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se pudo crear el perfil; esta cuenta de Google o nombre de usuario ya está en uso.") from error
+            else:
+                connection.rollback()
+                return {
+                    "link_required": True,
+                    "email": email,
+                    "display_name": google_name if isinstance(google_name, str) else "",
+                }
+            profile = connection.execute("SELECT * FROM profiles WHERE id = ?", (profile_id,)).fetchone()
+            token = issue_session("citizen", profile_id, connection)
+            connection.commit()
+        add_audit_event(
+            "google_account_linked" if linking_existing else "google_profile_created",
+            actor_type="citizen",
+            actor_id=profile_id,
+            target_type="profile",
+            target_id=profile_id,
+            message="Cuenta de Google vinculada" if linking_existing else "Perfil creado con Google",
+            metadata={"email": email},
+        )
         return {"token": token, "profile": public_profile(profile)}
 
     @app.post("/api/v1/auth/logout", status_code=status.HTTP_204_NO_CONTENT)

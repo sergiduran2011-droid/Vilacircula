@@ -1,6 +1,5 @@
 (() => {
   const TOKEN_KEY = 'vilacircula-api-token';
-  const PROFILE_KEY = 'vilacircula-local-profile';
   const API_CONFIG = fetch('./api-config.json')
     .then(response => response.ok ? response.json() : {})
     .catch(() => ({}));
@@ -18,7 +17,7 @@
   document.querySelector('.topbar').after(status);
   const style = document.createElement('link');
   style.rel = 'stylesheet';
-  style.href = './api-client.css';
+  style.href = './api-client.css?v=17';
   document.head.append(style);
   const cashierStyle = document.createElement('link');
   cashierStyle.rel = 'stylesheet';
@@ -34,6 +33,8 @@
   let liveApi = false;
   let rewards = [];
   let merchantCatalog = [];
+  let googleSdkPromise;
+  let pendingGoogleCredential = null;
   const ONBOARDING_KEY = 'vilacircula-onboarding-seen';
 
   function setButtonLoading(button, label = 'Procesando…') {
@@ -235,14 +236,6 @@
     overlay.querySelector('#onboarding-start').focus();
   }
 
-  function fallbackProfile() {
-    try {
-      return JSON.parse(localStorage.getItem(PROFILE_KEY) || 'null');
-    } catch {
-      return null;
-    }
-  }
-
   function updateProfileUi(value) {
     profile = value;
     window.applyCitizenProfile(value.display_name, value.school);
@@ -302,57 +295,149 @@
     document.querySelector('#profile-dialog')?.remove();
   }
 
-  function openAuthDialog(mode = 'login') {
-    closeProfileDialog();
-    const signup = mode === 'signup';
-    const overlay = document.createElement('div');
-    overlay.id = 'profile-dialog';
-    overlay.className = 'modal-backdrop';
-    overlay.innerHTML = `<section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title"><span class="eyebrow">VILADECANS · PERFIL CIUDADANO</span><h2 id="profile-title">${signup ? 'Crea tu cuenta.' : 'Entra en VilaCircula.'}</h2><p>Sin correo electrónico. Usa tu nombre de usuario y contraseña.</p><form id="profile-form">${signup ? '<label for="citizen-name">Nombre o apodo</label><input id="citizen-name" name="display_name" maxlength="32" autocomplete="nickname" required value="Sergi"><label for="citizen-school">Tu instituto</label><select id="citizen-school" name="school" required><option>Goar</option><option>Torre-roja</option><option>Josep Mestres</option><option>Miramar</option><option>Olímpia</option><option>Sales</option></select>' : ''}<label for="citizen-username">Nombre de usuario</label><input id="citizen-username" name="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9._\\-]+" autocomplete="username" required ${signup ? 'value="sergi"' : ''}><label for="citizen-password">Contraseña</label><input id="citizen-password" name="password" type="password" minlength="10" maxlength="128" autocomplete="${signup ? 'new-password' : 'current-password'}" required><p class="profile-privacy">${signup ? 'Mínimo 10 caracteres. El saldo y los cupones quedan en tu cuenta.' : 'La contraseña se verifica en el servidor; no se almacena en el navegador.'}</p><button class="primary profile-submit" id="profile-submit" type="submit">${signup ? 'Crear cuenta' : 'Iniciar sesión'}</button><p class="profile-error" id="profile-error" role="alert"></p></form><button class="profile-local" id="auth-switch">${signup ? 'Ya tengo una cuenta' : 'Crear una cuenta'}</button>${signup ? '<button class="profile-local" id="profile-local">Probar sin servidor · datos locales</button>' : ''}</section>`;
-    document.querySelector('#modal-root').append(overlay);
-    window.lucide?.createIcons();
-    overlay.querySelector('#auth-switch').addEventListener('click', () => openAuthDialog(signup ? 'login' : 'signup'));
-    overlay.addEventListener('click', event => { if (event.target === overlay && token) closeProfileDialog(); });
-    overlay.querySelector('#profile-form').addEventListener('submit', async event => {
+  function completeGoogleLogin(result) {
+    token = result.token;
+    localStorage.setItem(TOKEN_KEY, token);
+    liveApi = true;
+    updateProfileUi(result.profile);
+    return loadAccount().then(() => {
+      document.body.classList.remove('auth-locked');
+      closeProfileDialog();
+      openOnboarding();
+    });
+  }
+
+  function loadGoogleIdentitySdk() {
+    if (window.google?.accounts?.id) return Promise.resolve();
+    if (googleSdkPromise) return googleSdkPromise;
+    googleSdkPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('No se pudo cargar el acceso seguro de Google.'));
+      document.head.append(script);
+    });
+    return googleSdkPromise;
+  }
+
+  function showGoogleAccountChoices(overlay, claims) {
+    overlay.querySelector('#profile-title').textContent = 'Vincula tu perfil.';
+    overlay.querySelector('#profile-description').textContent =
+      `La cuenta ${claims.email} todavía no está vinculada. Usa tus credenciales actuales o crea un perfil nuevo.`;
+    overlay.querySelector('#google-button').hidden = true;
+    const choices = overlay.querySelector('#google-link-options');
+    choices.hidden = false;
+    choices.innerHTML = `<form id="google-link-form"><label for="link-username">Usuario actual de VilaCircula</label><input id="link-username" name="username" minlength="3" maxlength="24" autocomplete="username" required><label for="link-password">Contraseña actual</label><input id="link-password" name="password" type="password" autocomplete="current-password" required><button class="primary profile-submit" type="submit">Vincular mi perfil</button></form><button class="profile-local" id="google-create-profile">Crear un perfil nuevo</button><p class="profile-error" id="google-link-error" role="alert"></p>`;
+    choices.querySelector('#google-link-form').addEventListener('submit', async event => {
       event.preventDefault();
-      const data = new FormData(event.currentTarget);
-      const values = {
-        username: String(data.get('username')).trim(),
-        password: String(data.get('password'))
-      };
-      const submit = overlay.querySelector('#profile-submit');
-      const errorNode = overlay.querySelector('#profile-error');
-      setButtonLoading(submit, signup ? 'Creando cuenta…' : 'Iniciando sesión…');
-      errorNode.textContent = '';
+      const form = new FormData(event.currentTarget);
+      const submit = choices.querySelector('.profile-submit');
+      const error = choices.querySelector('#google-link-error');
+      setButtonLoading(submit, 'Vinculando…');
+      error.textContent = '';
       try {
-        const result = signup
-          ? await request('/profiles', { method: 'POST', body: JSON.stringify({
-            ...values,
-            display_name: String(data.get('display_name')).trim(),
-            school: String(data.get('school'))
-          }) })
-          : await request('/auth/login', { method: 'POST', body: JSON.stringify(values) });
-        token = result.token;
-        localStorage.setItem(TOKEN_KEY, token);
-        localStorage.removeItem(PROFILE_KEY);
-        liveApi = true;
-        updateProfileUi(result.profile || result);
-        await loadAccount();
-        openOnboarding();
-        closeProfileDialog();
-      } catch (error) {
-        errorNode.textContent = getApiErrorMessage(error);
+        const result = await request('/auth/google', {
+          method: 'POST',
+          body: JSON.stringify({
+            credential: pendingGoogleCredential,
+            username: String(form.get('username')).trim(),
+            password: String(form.get('password'))
+          })
+        });
+        await completeGoogleLogin(result);
+      } catch (errorValue) {
+        error.textContent = getApiErrorMessage(errorValue);
         resetButtonLoading(submit);
       }
     });
-    overlay.querySelector('#profile-local')?.addEventListener('click', () => {
-      const saved = { display_name: overlay.querySelector('#citizen-name').value.trim() || 'Sergi', school: overlay.querySelector('#citizen-school').value };
-      localStorage.setItem(PROFILE_KEY, JSON.stringify(saved));
-      updateProfileUi(saved);
-      window.setCitizenLocalDemo();
-      setStatus('Modo local · saldo y cupones solo en este dispositivo.', 'demo');
-      closeProfileDialog();
+    choices.querySelector('#google-create-profile').addEventListener('click', () => {
+      choices.innerHTML = `<form id="google-create-form"><label for="google-display-name">Nombre o apodo</label><input id="google-display-name" name="display_name" maxlength="32" autocomplete="nickname" required><label for="google-school">Tu instituto</label><select id="google-school" name="school" required><option value="">Selecciona tu instituto</option><option>Goar</option><option>Torre-roja</option><option>Josep Mestres</option><option>Miramar</option><option>Olímpia</option><option>Sales</option></select><button class="primary profile-submit" type="submit">Crear cuenta con Google</button></form><button class="profile-local" id="google-link-existing">Vincular un perfil que ya tengo</button><p class="profile-error" id="google-link-error" role="alert"></p>`;
+      choices.querySelector('#google-display-name').value = claims.display_name || '';
+      choices.querySelector('#google-create-form').addEventListener('submit', async event => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const submit = choices.querySelector('.profile-submit');
+        const error = choices.querySelector('#google-link-error');
+        setButtonLoading(submit, 'Creando cuenta…');
+        error.textContent = '';
+        try {
+          const result = await request('/auth/google', {
+            method: 'POST',
+            body: JSON.stringify({
+              credential: pendingGoogleCredential,
+              display_name: String(form.get('display_name')).trim(),
+              school: String(form.get('school'))
+            })
+          });
+          await completeGoogleLogin(result);
+        } catch (errorValue) {
+          error.textContent = getApiErrorMessage(errorValue);
+          resetButtonLoading(submit);
+        }
+      });
+      choices.querySelector('#google-link-existing').addEventListener('click', () => showGoogleAccountChoices(overlay, claims));
     });
+  }
+
+  async function initializeGoogleButton(overlay) {
+    const error = overlay.querySelector('#google-auth-error');
+    try {
+      const config = await request('/auth/google/config');
+      if (!config.client_id) {
+        error.textContent = 'El acceso con Google todavía no está configurado en el servidor.';
+        return;
+      }
+      await loadGoogleIdentitySdk();
+      window.google.accounts.id.initialize({
+        client_id: config.client_id,
+        callback: async response => {
+          pendingGoogleCredential = response.credential;
+          error.textContent = '';
+          try {
+            const result = await request(linkCurrentSession ? '/auth/google/link' : '/auth/google', {
+              method: 'POST',
+              body: JSON.stringify({ credential: pendingGoogleCredential })
+            });
+            if (result.link_required) showGoogleAccountChoices(overlay, result);
+            else await completeGoogleLogin(result);
+          } catch (errorValue) {
+            error.textContent = getApiErrorMessage(errorValue);
+          }
+        }
+      });
+      window.google.accounts.id.renderButton(overlay.querySelector('#google-button'), {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        shape: 'rectangular',
+        text: 'signin_with',
+        locale: 'es',
+        width: Math.min(360, overlay.querySelector('.profile-modal').clientWidth - 48)
+      });
+    } catch (errorValue) {
+      error.textContent = getApiErrorMessage(errorValue);
+    }
+  }
+
+  function openAuthDialog(linkCurrentSession = false, existingProfile = null) {
+    closeProfileDialog();
+    const overlay = document.createElement('div');
+    overlay.id = 'profile-dialog';
+    const authGate = document.body.classList.contains('auth-locked');
+    overlay.className = `modal-backdrop${authGate ? ' auth-gate' : ''}`;
+    const description = linkCurrentSession
+      ? `Vincula Google para conservar el perfil ${existingProfile?.display_name || ''} · ${existingProfile?.school || ''}.`
+      : authGate
+        ? 'Inicia sesión con Google para acceder a tu espacio y tus EcoPuntos.'
+        : 'Usa tu cuenta de Google para continuar.';
+    overlay.innerHTML = `<section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title">${authGate ? '<div class="auth-brand"><span class="auth-mark"><i data-lucide="leaf"></i></span><strong>Vila<span>Circula</span></strong></div>' : ''}<span class="eyebrow">VILADECANS · PERFIL CIUDADANO</span><h2 id="profile-title">${linkCurrentSession ? 'Vincula tu cuenta.' : authGate ? 'Tu ciudad, en marcha.' : 'Entra en VilaCircula.'}</h2><p id="profile-description"></p><div class="google-button" id="google-button"></div><p class="profile-error" id="google-auth-error" role="alert"></p><div id="google-link-options" hidden></div></section>`;
+    overlay.querySelector('#profile-description').textContent = description;
+    document.querySelector('#modal-root').append(overlay);
+    window.lucide?.createIcons();
+    overlay.addEventListener('click', event => { if (event.target === overlay && token) closeProfileDialog(); });
+    initializeGoogleButton(overlay);
   }
 
   function openProfileDialog() {
@@ -401,10 +486,11 @@
   function openCitizenCredentials() {
     closeProfileDialog();
     const needsSetup = Boolean(profile?.password_setup_required);
+    const hasPassword = Boolean(profile?.has_password);
     const overlay = document.createElement('div');
     overlay.id = 'profile-dialog';
     overlay.className = 'modal-backdrop';
-    overlay.innerHTML = `<section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title"><button class="icon-button modal-close" id="profile-close" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">SEGURIDAD DE CUENTA</span><h2 id="profile-title">${needsSetup ? 'Protege tu cuenta.' : 'Cambiar credenciales'}</h2>${needsSetup ? '<p>Este perfil venía de la versión anterior. Añade usuario y contraseña antes de continuar.</p>' : ''}<form id="credentials-form"><label for="account-username">Nombre de usuario</label><input id="account-username" name="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9._\\-]+" autocomplete="username" required><label for="current-password">Contraseña actual${needsSetup ? ' (no configurada)' : ''}</label><input id="current-password" name="current_password" type="password" autocomplete="current-password" ${needsSetup ? '' : 'required'}><label for="new-password">${needsSetup ? 'Crea una contraseña' : 'Nueva contraseña'}</label><input id="new-password" name="password" type="password" minlength="10" maxlength="128" autocomplete="new-password" required><button class="primary profile-submit" type="submit">Guardar credenciales</button><p class="profile-error" id="profile-error" role="alert"></p></form></section>`;
+    overlay.innerHTML = `<section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title"><button class="icon-button modal-close" id="profile-close" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">SEGURIDAD DE CUENTA</span><h2 id="profile-title">${needsSetup ? 'Protege tu cuenta.' : 'Cambiar credenciales'}</h2>${needsSetup ? '<p>Este perfil venía de la versión anterior. Añade usuario y contraseña antes de continuar.</p>' : ''}<form id="credentials-form"><label for="account-username">Nombre de usuario</label><input id="account-username" name="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9._\\-]+" autocomplete="username" required><label for="current-password">Contraseña actual${hasPassword ? '' : ' (no configurada)'}</label><input id="current-password" name="current_password" type="password" autocomplete="current-password" ${hasPassword ? 'required' : ''}><label for="new-password">${hasPassword ? 'Nueva contraseña' : 'Crea una contraseña'}</label><input id="new-password" name="password" type="password" minlength="10" maxlength="128" autocomplete="new-password" required><button class="primary profile-submit" type="submit">Guardar credenciales</button><p class="profile-error" id="profile-error" role="alert"></p></form></section>`;
     document.querySelector('#modal-root').append(overlay);
     overlay.querySelector('#account-username').value = profile?.username || '';
     overlay.querySelector('#profile-close').addEventListener('click', openProfileDialog);
@@ -418,6 +504,7 @@
         token = result.token;
         localStorage.setItem(TOKEN_KEY, token);
         profile.username = result.username;
+        profile.has_password = true;
         profile.password_setup_required = false;
         closeProfileDialog();
         setStatus('Credenciales actualizadas; las otras sesiones se han cerrado.', 'connected');
@@ -438,6 +525,7 @@
     profile = null;
     liveApi = false;
     localStorage.removeItem(TOKEN_KEY);
+    document.body.classList.add('auth-locked');
     closeProfileDialog();
     openAuthDialog('login');
     setStatus('Sesión cerrada.', 'demo');
@@ -922,10 +1010,16 @@
     setConnectionState(navigator.onLine);
     if (token) {
       try {
+        const linkStatus = await request('/auth/google/link-status');
+        if (linkStatus.link_required) {
+          openAuthDialog(true, linkStatus);
+          return;
+        }
         const savedProfile = await request('/profile');
         updateProfileUi(savedProfile);
         liveApi = true;
         await loadAccount();
+        document.body.classList.remove('auth-locked');
         if (savedProfile.password_setup_required) openCitizenCredentials();
         else openOnboarding();
         return;
@@ -934,18 +1028,12 @@
         token = null;
       }
     }
-    const localProfile = fallbackProfile();
-    if (localProfile) {
-      profile = localProfile;
-      updateProfileUi(localProfile);
-      window.setCitizenLocalDemo();
-      setStatus('Modo local · saldo y cupones solo en este dispositivo.', 'demo');
-    }
+    openAuthDialog('login');
     try {
       await request('/health');
-      setStatus('Pulsa Cuenta para iniciar sesión.', 'connected');
+      setStatus('Inicia sesión para acceder a VilaCircula.', 'connected');
     } catch {
-      setStatus('API no disponible · explora la app o abre Cuenta para iniciar sesión.', 'error');
+      setStatus('API no disponible · comprueba la conexión antes de iniciar sesión.', 'error');
     }
   }
 
