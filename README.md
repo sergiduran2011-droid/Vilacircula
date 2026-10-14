@@ -14,14 +14,51 @@ The frontend is static and does not contain database credentials. Account, coupo
 ## Features
 
 - Resident registration, login, profile, point balance, activity, rewards, and coupons.
-- A Viladecans merchant map with category filters, optional nearby sorting, OpenStreetMap source links, and directions for locations with coordinates. A listed location is not by itself confirmation of a merchant partnership.
+- A Viladecans merchant map with category filters, optional distance sorting after the resident grants location permission, OpenStreetMap source links, and directions for mapped locations.
 - Server-derived achievement badges and current/longest-day activity streaks based on recorded point events.
-- A school leaderboard that reports institute totals and resident standings without publishing other residents' names.
+- A school leaderboard with each school's accumulated points and the signed-in resident's rank within their school; it does not publish other residents' names.
 - A cashier workspace with daily and weekly activity, a seven-day chart, recent validations, QR scanning, and manual code entry.
-- A resident wallet with active/redeemed coupon history and scannable coupon QR codes. In production, the merchant's authenticated cashier validates the QR; the resident cannot mark their own coupon redeemed.
+- A resident wallet with active/redeemed coupon history and scannable coupon QR codes. In production, the merchant's authenticated cashier validates the QR; residents cannot mark their own coupons as redeemed.
 - Coupon validation scoped to the cashier's merchant. A successful redemption is recorded once and moves the coupon out of the active wallet.
 - Server-issued EcoID QR codes that expire after 45 seconds and can be used once. An authorized cashier scan awards 10 points to the associated account.
 - An administration dashboard for aggregate operational metrics and cashier provisioning.
+- PWA installation from the first sign-in screen and the first-login welcome card, with browser-native installation where available and device-specific instructions otherwise.
+
+### Install VilaCircula
+
+On a first visit, choose **Añadir aplicación** on the sign-in screen or welcome card. Supported browsers open their native install prompt; on iPhone or iPad, open the site in Safari and use **Compartir → Añadir a pantalla de inicio**. Installation must be confirmed in the browser and cannot be triggered automatically. The service worker caches the app shell for repeat visits and offline access to cached frontend resources.
+
+### Merchant map and location
+
+The directory shows merchant records supplied by the API, lets residents filter by category, and plots records that have coordinates on the Viladecans map. The **near me** control asks the browser for location permission, calculates distances on the device, reorders the directory, and recenters the map. The coordinates are not sent to the API. Residents can open directions for a mapped merchant or follow its source link.
+
+OpenStreetMap data confirms a mapped place and its coordinates, not a partnership with VilaCircula or the availability of an offer. Entries explicitly marked as examples are illustrative and are not participating businesses. The current sample rewards and merchant offers are not verified for redemption at a real shop.
+
+### Badges and activity streaks
+
+The API builds the resident's progress summary from server-recorded point events; changing browser state cannot award a badge or increase a streak. Activity is grouped by calendar day in the `Europe/Madrid` time zone. The app shows both the current consecutive-day streak and the longest streak recorded for the account. The current streak remains active if there was a point event today or yesterday.
+
+The current badge milestones are:
+
+| Badge | Requirement |
+| --- | --- |
+| First steps | Earn at least 1 contribution point. |
+| Eco 100 | Earn 100 contribution points. |
+| Eco 500 | Earn 500 contribution points. |
+| Constancy | Record point-earning activity on 3 consecutive days. |
+| Unstoppable | Record point-earning activity on 7 consecutive days. |
+
+The interface displays earned badges and progress toward the remaining milestones. Streaks are based on points already recorded by the API; this feature does not add weekly challenges, step tracking, or a way for residents to award themselves points.
+
+### School leaderboard
+
+The leaderboard aggregates contribution points by school and shows the signed-in resident's position among profiles in their own school. It does not expose other residents' names or individual activity. Totals depend on the profiles and point events present in the configured database; development/demo data should not be treated as official school results.
+
+### Coupon wallet and QR validation
+
+When a resident redeems an available reward, the API checks their balance, deducts the reward cost, and creates a single-use coupon in the wallet. Active coupons display a QR code and expiry; redeemed coupons move into the wallet's history. While an active coupon is open, the app checks whether the merchant has validated it and updates the view when its status changes.
+
+In production, the resident presents the coupon QR at the shop. An authenticated cashier scans it; the API checks that the cashier belongs to the coupon's merchant and prevents a second redemption. Resident self-redemption is disabled in production. The cashier's EcoID scanner is a separate flow: a resident displays a short-lived, single-use EcoID QR and an authorized cashier scan awards 10 points.
 
 ## Run locally
 
@@ -108,7 +145,7 @@ docker compose up --build
 - Render runs FastAPI; GitHub Pages only serves the static frontend.
 - Supabase stores application data in PostgreSQL. Database and admin secrets belong only in Render's environment settings.
 - Use HTTPS and restrict CORS to the deployed frontend origin.
-- Demo merchants, sample rewards, and step challenges are illustrative. Step tracking and real merchant offer fulfilment are not integrated.
+- Example merchants and sample rewards are illustrative. Real merchant partnerships and offer fulfilment are not integrated. Weekly challenges and step tracking have not been added.
 - The self-service demo point-award endpoint is disabled when `VILACIRCULA_ENV=production`; points should be awarded by an authenticated cashier scanning a valid EcoID.
 
 Check the live `/api/v1/health` endpoint after a deployment to confirm the active environment, database backend, and CORS origins.

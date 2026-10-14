@@ -17,7 +17,7 @@
   document.querySelector('.topbar').after(status);
   const style = document.createElement('link');
   style.rel = 'stylesheet';
-  style.href = './api-client.css?v=21';
+  style.href = './api-client.css?v=22';
   document.head.append(style);
   const cashierStyle = document.createElement('link');
   cashierStyle.rel = 'stylesheet';
@@ -35,7 +35,131 @@
   let merchantCatalog = [];
   let googleSdkPromise;
   let pendingGoogleCredential = null;
+  let deferredInstallPrompt = null;
   const ONBOARDING_KEY = 'vilacircula-onboarding-seen';
+  const INSTALLED_KEY = 'vilacircula-installed';
+
+  window.addEventListener('beforeinstallprompt', event => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+  });
+
+  window.addEventListener('appinstalled', () => {
+    deferredInstallPrompt = null;
+    localStorage.setItem(INSTALLED_KEY, '1');
+    const installButton = document.querySelector('#install');
+    if (installButton) installButton.style.display = 'none';
+    document.querySelectorAll('.install-app-prompt').forEach(card => {
+      card.classList.add('installed');
+      card.querySelector('.install-app-button').textContent = 'Aplicación instalada';
+      card.querySelector('.install-app-button').disabled = true;
+      card.querySelector('.install-app-description').textContent = 'VilaCircula ya está instalada en este dispositivo.';
+    });
+  });
+
+  document.querySelector('#install')?.addEventListener('click', () => {
+    deferredInstallPrompt = null;
+  });
+
+  function isAppInstalled() {
+    return localStorage.getItem(INSTALLED_KEY) === '1'
+      || window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+  }
+
+  function installInstructions() {
+    const userAgent = navigator.userAgent;
+    const isIOS = /iPhone|iPad|iPod/.test(userAgent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (isIOS) {
+      return [
+        'Abre VilaCircula en Safari.',
+        'Pulsa el botón Compartir.',
+        'Elige «Añadir a pantalla de inicio» y confirma con «Añadir».'
+      ];
+    }
+    if (/Macintosh/.test(userAgent) && /Safari/.test(userAgent) && !/Chrome|Chromium|CriOS/.test(userAgent)) {
+      return [
+        'Abre el menú «Archivo» de Safari.',
+        'Elige «Añadir al Dock».',
+        'Confirma el nombre y pulsa «Añadir».'
+      ];
+    }
+    if (/Android/.test(userAgent)) {
+      return [
+        'Abre el menú del navegador (⋮).',
+        'Elige «Instalar aplicación» o «Añadir a pantalla de inicio».',
+        'Confirma para añadir VilaCircula a tu dispositivo.'
+      ];
+    }
+    return [
+      'Abre el menú de tu navegador o busca el icono de instalación en la barra de direcciones.',
+      'Elige «Instalar VilaCircula» o «Añadir al escritorio».',
+      'Confirma la instalación.'
+    ];
+  }
+
+  function openInstallInstructions() {
+    const overlay = document.createElement('div');
+    overlay.id = 'install-help-dialog';
+    overlay.className = 'modal-backdrop';
+    overlay.innerHTML = '<section class="modal install-help-modal" role="dialog" aria-modal="true" aria-labelledby="install-help-title"><button class="icon-button modal-close" id="install-help-close" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">VILACIRCULA EN TU DISPOSITIVO</span><h2 id="install-help-title">Añádela a tu pantalla.</h2><p>Sigue estos pasos en el navegador que estás usando:</p><ol class="install-instructions"></ol><button class="primary install-help-done" id="install-help-done">Entendido</button></section>';
+    const instructions = overlay.querySelector('.install-instructions');
+    installInstructions().forEach(text => {
+      const item = document.createElement('li');
+      item.textContent = text;
+      instructions.append(item);
+    });
+    document.querySelector('#modal-root').append(overlay);
+    window.lucide?.createIcons();
+    const close = () => overlay.remove();
+    overlay.querySelector('#install-help-close').addEventListener('click', close);
+    overlay.querySelector('#install-help-done').addEventListener('click', close);
+    overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+  }
+
+  async function requestAppInstall() {
+    if (!deferredInstallPrompt) {
+      openInstallInstructions();
+      return null;
+    }
+    const prompt = deferredInstallPrompt;
+    deferredInstallPrompt = null;
+    const installButton = document.querySelector('#install');
+    if (installButton) installButton.style.display = 'none';
+    try {
+      await prompt.prompt();
+      return (await prompt.userChoice).outcome;
+    } catch (error) {
+      console.error('No se pudo abrir el diálogo de instalación de VilaCircula.', error);
+      openInstallInstructions();
+      return null;
+    }
+  }
+
+  function addInstallPrompt(container) {
+    if (isAppInstalled()) return;
+    const card = document.createElement('aside');
+    card.className = 'install-app-prompt';
+    card.innerHTML = '<span class="install-app-icon"><i data-lucide="smartphone"></i></span><div class="install-app-copy"><strong>Ten VilaCircula en tu dispositivo.</strong><small class="install-app-description">Añádela al escritorio o a la pantalla de inicio para abrirla como una aplicación.</small></div><button class="install-app-button" type="button">Añadir aplicación</button>';
+    container.append(card);
+    window.lucide?.createIcons();
+    card.querySelector('.install-app-button').addEventListener('click', async () => {
+      const outcome = await requestAppInstall();
+      if (outcome === 'accepted') card.querySelector('.install-app-description').textContent = 'VilaCircula se está añadiendo a este dispositivo.';
+      else if (outcome === 'dismissed') card.querySelector('.install-app-description').textContent = 'Puedes instalarla más tarde desde el menú del navegador.';
+    });
+  }
+
+  async function registerServiceWorker() {
+    if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+    try {
+      await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    } catch (error) {
+      console.error('No se pudo registrar el service worker de VilaCircula.', error);
+      setStatus('No se pudo preparar la instalación de la app. Recarga la página o prueba otro navegador.', 'error');
+    }
+  }
 
   function setButtonLoading(button, label = 'Procesando…') {
     if (!button) return;
@@ -221,6 +345,7 @@
     overlay.className = 'modal-backdrop';
     overlay.innerHTML = `<section class="modal onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><button class="icon-button modal-close" id="onboarding-close" aria-label="Cerrar bienvenida"><i data-lucide="x"></i></button><span class="eyebrow">PRIMEROS PASOS</span><h2 id="onboarding-title">Empieza en VilaCircula.</h2><p>Tu cuenta ya está lista. En menos de un minuto puedes empezar a usar tus EcoPuntos.</p><div class="onboarding-steps"><div><b>1</b><span><strong>Explora</strong><small>Descubre comercios cercanos y sus iniciativas.</small></span></div><div><b>2</b><span><strong>Participa</strong><small>Enséñale tu EcoID al comercio.</small></span></div><div><b>3</b><span><strong>Disfruta</strong><small>Canjea tus puntos por recompensas locales.</small></span></div></div><button class="primary" id="onboarding-start"><i data-lucide="map-pin"></i>Ver comercios</button><button class="profile-local" id="onboarding-later">Ahora no</button></section>`;
     document.querySelector('#modal-root').append(overlay);
+    addInstallPrompt(overlay.querySelector('.onboarding-modal'));
     window.lucide?.createIcons();
     const finish = () => {
       localStorage.setItem(ONBOARDING_KEY, '1');
@@ -411,6 +536,7 @@
     overlay.innerHTML = `<section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title">${authGate ? '<div class="auth-brand"><span class="auth-mark"><i data-lucide="leaf"></i></span><strong>Vila<span>Circula</span></strong></div>' : ''}<span class="eyebrow">VILADECANS · PERFIL CIUDADANO</span><h2 id="profile-title">${linkCurrentSession ? 'Vincula tu cuenta.' : authGate ? 'Tu ciudad, en marcha.' : 'Entra en VilaCircula.'}</h2><p id="profile-description"></p><div class="google-button" id="google-button"></div><p class="profile-error" id="google-auth-error" role="alert"></p><div id="google-link-options" hidden></div></section>`;
     overlay.querySelector('#profile-description').textContent = description;
     document.querySelector('#modal-root').append(overlay);
+    if (!linkCurrentSession) addInstallPrompt(overlay.querySelector('.profile-modal'));
     window.lucide?.createIcons();
     overlay.addEventListener('click', event => { if (event.target === overlay && token) closeProfileDialog(); });
     initializeGoogleButton(overlay, linkCurrentSession);
@@ -993,6 +1119,7 @@
   }
 
   async function initialize() {
+    await registerServiceWorker();
     setConnectionState(navigator.onLine);
     if (token) {
       try {

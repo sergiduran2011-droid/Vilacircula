@@ -41,6 +41,21 @@ def create_profile(client, username="sergi"):
     return body, {"Authorization": f"Bearer {body['token']}"}
 
 
+def test_serves_pwa_assets(tmp_path):
+    with make_client(tmp_path) as client:
+        features = client.get("/features.css")
+        service_worker = client.get("/sw.js")
+        manifest = client.get("/manifest.json")
+        icons = [client.get(f"/{icon['src']}") for icon in manifest.json()["icons"]]
+
+    assert features.status_code == 200
+    assert "engagement-panel" in features.text
+    assert service_worker.status_code == 200
+    assert service_worker.headers["service-worker-allowed"] == "/"
+    assert manifest.status_code == 200
+    assert all(icon.status_code == 200 for icon in icons)
+
+
 def test_profile_has_no_email_and_is_stored_in_sqlite(tmp_path):
     with make_client(tmp_path) as client:
         profile, headers = create_profile(client)

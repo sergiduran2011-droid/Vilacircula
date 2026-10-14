@@ -1295,7 +1295,7 @@ def create_app(
     def service_worker() -> FileResponse:
         return FileResponse(ROOT / "sw.js", media_type="application/javascript", headers={"Service-Worker-Allowed": "/"})
 
-    for asset in ("index.html", "manifest.json", "viladecans.js", "viladecans.css", "api-client.js", "api-client.css", "cashier.css", "cashier-dashboard.css"):
+    for asset in ("index.html", "manifest.json", "viladecans.js", "viladecans.css", "features.css", "api-client.js", "api-client.css", "cashier.css", "cashier-dashboard.css"):
         app.add_api_route(f"/{asset}", lambda asset=asset: FileResponse(ROOT / asset), methods=["GET"], include_in_schema=False)
 
     app.mount("/icons", StaticFiles(directory=ROOT / "icons"), name="icons")
