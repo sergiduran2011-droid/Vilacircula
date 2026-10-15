@@ -17,7 +17,7 @@
   document.querySelector('.topbar').after(status);
   const style = document.createElement('link');
   style.rel = 'stylesheet';
-  style.href = './api-client.css?v=23';
+  style.href = './api-client.css?v=25';
   document.head.append(style);
   const cashierStyle = document.createElement('link');
   cashierStyle.rel = 'stylesheet';
@@ -895,10 +895,30 @@
 
   let liveEcoIdTimer;
   let liveEcoIdPollTimer;
+  let liveEcoIdRetryTimer;
+  let liveEcoIdStreamController;
+  let liveEcoIdVisibilityHandler;
+  let liveEcoIdOnlineHandler;
+  let liveEcoIdOfflineHandler;
 
   function closeLiveEcoId() {
     clearInterval(liveEcoIdTimer);
     clearInterval(liveEcoIdPollTimer);
+    clearTimeout(liveEcoIdRetryTimer);
+    liveEcoIdStreamController?.abort();
+    liveEcoIdStreamController = null;
+    if (liveEcoIdVisibilityHandler) {
+      document.removeEventListener('visibilitychange', liveEcoIdVisibilityHandler);
+      liveEcoIdVisibilityHandler = null;
+    }
+    if (liveEcoIdOnlineHandler) {
+      window.removeEventListener('online', liveEcoIdOnlineHandler);
+      liveEcoIdOnlineHandler = null;
+    }
+    if (liveEcoIdOfflineHandler) {
+      window.removeEventListener('offline', liveEcoIdOfflineHandler);
+      liveEcoIdOfflineHandler = null;
+    }
     document.querySelector('#live-ecoid-dialog')?.remove();
   }
 
@@ -907,72 +927,237 @@
     const overlay = document.createElement('div');
     overlay.id = 'live-ecoid-dialog';
     overlay.className = 'modal-backdrop';
-    overlay.innerHTML = '<section class="modal live-ecoid-modal" role="dialog" aria-modal="true" aria-labelledby="live-ecoid-title"><button class="icon-button modal-close" id="live-ecoid-close" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">IDENTIFICACIÓN · CAJA</span><h2 id="live-ecoid-title">Tu EcoID</h2><p>El cajero lo escanea para añadir 10 EcoPuntos a tu cuenta. Cada código solo sirve una vez.</p><div class="coupon-large-qr" id="live-ecoid-qr"></div><strong class="live-ecoid-countdown" id="live-ecoid-countdown">Preparando código…</strong><small class="live-ecoid-code" id="live-ecoid-code"></small><p class="profile-error" id="live-ecoid-error" role="status"></p></section>';
+    overlay.innerHTML = '<section class="modal live-ecoid-modal" role="dialog" aria-modal="true" aria-labelledby="live-ecoid-title"><button class="icon-button modal-close" id="live-ecoid-close" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">IDENTIFICACIÓN · CAJA</span><h2 id="live-ecoid-title">Tu EcoID</h2><p>El cajero lo escanea para añadir 10 EcoPuntos a tu cuenta. Cada código solo sirve una vez.</p><div class="coupon-large-qr" id="live-ecoid-qr"></div><strong class="live-ecoid-countdown" id="live-ecoid-countdown">Preparando código…</strong><small class="live-ecoid-code" id="live-ecoid-code"></small><p class="live-ecoid-status" id="live-ecoid-status" role="status" aria-live="polite">Conectando para confirmar el escaneo…</p><p class="profile-error" id="live-ecoid-error" role="alert" aria-live="assertive"></p></section>';
     document.querySelector('#modal-root').append(overlay);
     window.lucide?.createIcons();
     overlay.querySelector('#live-ecoid-close').addEventListener('click', closeLiveEcoId);
     overlay.addEventListener('click', event => { if (event.target === overlay) closeLiveEcoId(); });
     const qrNode = overlay.querySelector('#live-ecoid-qr');
     const countdown = overlay.querySelector('#live-ecoid-countdown');
+    const statusNode = overlay.querySelector('#live-ecoid-status');
     const errorNode = overlay.querySelector('#live-ecoid-error');
     let expiresAt = 0;
     let issuing = false;
-    let polling = false;
+    let pollInProgress = false;
+    let streamConnecting = false;
+    let streamConnected = false;
+    let scanConfirmed = false;
+    let codeExpired = false;
+    let retryDelay = 1000;
+    let codeIssueRetryDelay = 1000;
+
+    const setConnectionStatus = (message, mode = 'waiting') => {
+      statusNode.textContent = message;
+      statusNode.dataset.mode = mode;
+    };
+
+    const stopMonitoring = () => {
+      clearInterval(liveEcoIdPollTimer);
+      clearTimeout(liveEcoIdRetryTimer);
+      liveEcoIdStreamController?.abort();
+      liveEcoIdStreamController = null;
+      streamConnected = false;
+    };
+
+    const confirmScan = () => {
+      if (scanConfirmed || !overlay.isConnected) return;
+      scanConfirmed = true;
+      clearInterval(liveEcoIdTimer);
+      stopMonitoring();
+      qrNode.replaceChildren();
+      countdown.textContent = '¡EcoID escaneado correctamente!';
+      overlay.querySelector('#live-ecoid-code').textContent = '';
+      errorNode.textContent = '';
+      setConnectionStatus('Se han añadido 10 EcoPuntos a tu cuenta.', 'success');
+      if ('vibrate' in navigator) navigator.vibrate([80, 40, 100]);
+      notifyUser('EcoID escaneado correctamente', 'Se han añadido 10 EcoPuntos a tu cuenta.');
+      refreshWallet().catch(error => {
+        console.error('No se pudo actualizar el saldo después de validar el EcoID.', error);
+        setConnectionStatus('El escaneo se confirmó, pero no se pudo actualizar el saldo. Recarga la app para ver los puntos.', 'error');
+      });
+    };
+
+    const handleEcoIdStatus = payload => {
+      if (payload.scanned) {
+        confirmScan();
+      } else if (payload.expired) {
+        codeExpired = true;
+        setConnectionStatus('El código ha caducado; preparando otro…');
+        expiresAt = Date.now();
+      }
+    };
+
     const issueCode = async () => {
-      if (issuing) return;
+      if (issuing || scanConfirmed) return;
       issuing = true;
+      stopMonitoring();
+      qrNode.replaceChildren();
+      overlay.querySelector('#live-ecoid-code').textContent = '';
+      setConnectionStatus('Generando un código seguro…');
       try {
         const issued = await request('/eco-id', { method: 'POST' });
-        qrNode.innerHTML = '';
+        if (!overlay.isConnected) return;
         if (window.QRCode) new QRCode(qrNode, { text: issued.code, width: 184, height: 184, colorDark: '#19281f', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
         else qrNode.textContent = issued.code;
         overlay.querySelector('#live-ecoid-code').textContent = issued.code;
         expiresAt = Date.parse(issued.expires_at);
+        codeExpired = false;
+        codeIssueRetryDelay = 1000;
         errorNode.textContent = '';
+        setConnectionStatus('Esperando a que la caja escanee tu código…');
+        startMonitoring();
       } catch (error) {
         errorNode.textContent = getApiErrorMessage(error);
-        countdown.textContent = 'No se pudo generar el QR';
-        expiresAt = Date.now() + 5000;
+        setConnectionStatus('No se pudo generar el código. Se volverá a intentar automáticamente.', 'error');
+        expiresAt = Date.now() + codeIssueRetryDelay;
+        codeIssueRetryDelay = Math.min(codeIssueRetryDelay * 2, 15000);
       } finally {
         issuing = false;
       }
     };
-    const checkScanStatus = async () => {
+
+    const checkScanStatus = async (force = false) => {
       const code = overlay.querySelector('#live-ecoid-code').textContent;
-      if (polling || !code || !overlay.isConnected) return;
-      polling = true;
+      if (pollInProgress || scanConfirmed || (streamConnected && !force) || !code || !overlay.isConnected || !navigator.onLine) return;
+      pollInProgress = true;
       try {
         const result = await request(`/eco-id/${encodeURIComponent(code)}/status`);
-        if (!overlay.isConnected || !result.scanned) return;
-        clearInterval(liveEcoIdTimer);
-        clearInterval(liveEcoIdPollTimer);
-        qrNode.replaceChildren();
-        countdown.textContent = '¡EcoID escaneado correctamente!';
-        overlay.querySelector('#live-ecoid-code').textContent = '';
-        errorNode.classList.remove('profile-error');
-        errorNode.classList.add('live-ecoid-success');
-        errorNode.textContent = 'Se han añadido 10 EcoPuntos a tu cuenta.';
-        if ('vibrate' in navigator) navigator.vibrate([80, 40, 100]);
-        notifyUser('EcoID escaneado correctamente', 'Se han añadido 10 EcoPuntos a tu cuenta.');
-        refreshWallet().catch(error => {
-          console.error('No se pudo actualizar el saldo después de validar el EcoID.', error);
-          setStatus('EcoID escaneado correctamente; no se pudo actualizar el saldo. Recarga la app para ver los puntos.', 'error');
-        });
+        handleEcoIdStatus(result);
+        if (!result.scanned && !result.expired && !streamConnected) {
+          setConnectionStatus('Reconectando en tiempo real; comprobando el escaneo automáticamente…', 'reconnecting');
+        }
       } catch (error) {
         if (!overlay.isConnected) return;
-        errorNode.textContent = getApiErrorMessage(error);
-        if (/401|403/.test(error.message)) clearInterval(liveEcoIdPollTimer);
+        if (/Inicia sesión|sesión ha caducado|Vincula una cuenta/.test(error.message)) {
+          clearInterval(liveEcoIdTimer);
+          stopMonitoring();
+          errorNode.textContent = 'Tu sesión ha caducado. Cierra este aviso e inicia sesión de nuevo.';
+          setConnectionStatus('No se puede confirmar el escaneo sin una sesión válida.', 'error');
+          return;
+        }
+        setConnectionStatus('Sin conexión con el servidor; reintentando automáticamente…', 'error');
       } finally {
-        polling = false;
+        pollInProgress = false;
       }
     };
+
+    const consumeScanEvents = async (code, controller) => {
+      const response = await fetch(await apiUrl(`/eco-id/${encodeURIComponent(code)}/events`), {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        const error = new Error(payload.detail || `Error del servidor (${response.status}).`);
+        error.status = response.status;
+        throw error;
+      }
+      if (!response.body) throw new Error('El navegador no permite recibir eventos en tiempo real.');
+      streamConnected = true;
+      retryDelay = 1000;
+      errorNode.textContent = '';
+      setConnectionStatus('Conexión activa · esperando el escaneo de caja…', 'connected');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        while (!controller.signal.aborted) {
+          const { value, done } = await reader.read();
+          if (done) return;
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split(/\r?\n\r?\n/);
+          buffer = blocks.pop() || '';
+          for (const block of blocks) {
+            const data = block.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
+            if (data) handleEcoIdStatus(JSON.parse(data));
+            if (scanConfirmed || codeExpired || !overlay.isConnected) return;
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    };
+
+    const scheduleStreamReconnect = delay => {
+      clearTimeout(liveEcoIdRetryTimer);
+      liveEcoIdRetryTimer = setTimeout(() => {
+        if (streamConnecting) scheduleStreamReconnect(250);
+        else connectToScanEvents();
+      }, delay);
+    };
+
+    const connectToScanEvents = async () => {
+      const code = overlay.querySelector('#live-ecoid-code').textContent;
+      if (streamConnecting || scanConfirmed || !code || !overlay.isConnected || !navigator.onLine) return;
+      streamConnecting = true;
+      const controller = new AbortController();
+      liveEcoIdStreamController = controller;
+      try {
+        await consumeScanEvents(code, controller);
+        if (codeExpired && overlay.isConnected && !scanConfirmed) {
+          liveEcoIdRetryTimer = setTimeout(issueCode, 0);
+          return;
+        }
+        if (!controller.signal.aborted && !scanConfirmed && overlay.isConnected) throw new Error('La conexión de confirmación se cerró.');
+      } catch (error) {
+        if (controller.signal.aborted || !overlay.isConnected || scanConfirmed) return;
+        if (codeExpired) {
+          liveEcoIdRetryTimer = setTimeout(issueCode, 0);
+          return;
+        }
+        if (/Inicia sesión|sesión ha caducado|Vincula una cuenta/.test(error.message)) {
+          clearInterval(liveEcoIdTimer);
+          stopMonitoring();
+          errorNode.textContent = 'Tu sesión ha caducado. Cierra este aviso e inicia sesión de nuevo.';
+          setConnectionStatus('No se puede confirmar el escaneo sin una sesión válida.', 'error');
+          return;
+        }
+        streamConnected = false;
+        setConnectionStatus('Conexión en tiempo real interrumpida; reintentando y comprobando el estado…', 'reconnecting');
+        if (!liveEcoIdPollTimer) liveEcoIdPollTimer = setInterval(checkScanStatus, 3000);
+        scheduleStreamReconnect(retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 15000);
+      } finally {
+        if (liveEcoIdStreamController === controller) liveEcoIdStreamController = null;
+        streamConnecting = false;
+      }
+    };
+
+    const startMonitoring = () => {
+      liveEcoIdPollTimer = setInterval(checkScanStatus, 3000);
+      connectToScanEvents();
+    };
+
     await issueCode();
+    if (!overlay.isConnected) return;
     liveEcoIdTimer = setInterval(() => {
       const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
       countdown.textContent = seconds ? `Se renueva en 00:${String(seconds).padStart(2, '0')}` : 'Renovando código…';
-      if (seconds === 0) issueCode();
+      if (seconds === 0 && !issuing && !streamConnecting) issueCode();
     }, 1000);
-    liveEcoIdPollTimer = setInterval(checkScanStatus, 2000);
+    liveEcoIdVisibilityHandler = () => {
+      if (document.visibilityState === 'visible' && overlay.isConnected && !scanConfirmed) {
+        liveEcoIdStreamController?.abort();
+        streamConnected = false;
+        checkScanStatus(true);
+        scheduleStreamReconnect(250);
+      }
+    };
+    document.addEventListener('visibilitychange', liveEcoIdVisibilityHandler);
+    liveEcoIdOnlineHandler = () => {
+      setConnectionStatus('Conexión recuperada; comprobando el código…', 'reconnecting');
+      checkScanStatus(true);
+      liveEcoIdStreamController?.abort();
+      streamConnected = false;
+      scheduleStreamReconnect(250);
+    };
+    liveEcoIdOfflineHandler = () => {
+      setConnectionStatus('Sin conexión a internet. Se reanudará la confirmación al recuperar la conexión.', 'error');
+      liveEcoIdStreamController?.abort();
+      streamConnected = false;
+    };
+    window.addEventListener('online', liveEcoIdOnlineHandler);
+    window.addEventListener('offline', liveEcoIdOfflineHandler);
   }
 
   async function refreshWallet() {

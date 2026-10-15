@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -8,6 +9,7 @@ import re
 import secrets
 import sqlite3
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,7 +17,7 @@ from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from google.auth.exceptions import GoogleAuthError
@@ -906,8 +908,54 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="EcoID no encontrado.")
         return {
             "scanned": eco_id["scanned_at"] is not None,
+            "expired": datetime.fromisoformat(eco_id["expires_at"]) <= datetime.now(UTC),
             "expires_at": eco_id["expires_at"],
         }
+
+    @app.get("/api/v1/eco-id/{code}/events")
+    async def eco_id_scan_events(
+        code: str,
+        profile: sqlite3.Row = Depends(current_profile),
+    ) -> StreamingResponse:
+        with closing(connect()) as connection:
+            eco_id = connection.execute(
+                "SELECT scanned_at, expires_at FROM eco_id_tokens WHERE code = ? AND profile_id = ?",
+                (code, profile["id"]),
+            ).fetchone()
+        if eco_id is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="EcoID no encontrado.")
+
+        async def events() -> AsyncIterator[str]:
+            loop = asyncio.get_running_loop()
+            last_heartbeat = loop.time()
+            expired = datetime.fromisoformat(eco_id["expires_at"]) <= datetime.now(UTC)
+            scanned = eco_id["scanned_at"] is not None
+            yield f"event: status\ndata: {json.dumps({'scanned': scanned, 'expired': expired, 'expires_at': eco_id['expires_at']})}\n\n"
+            if scanned or expired:
+                return
+            while True:
+                with closing(connect()) as connection:
+                    current = connection.execute(
+                        "SELECT scanned_at, expires_at FROM eco_id_tokens WHERE code = ? AND profile_id = ?",
+                        (code, profile["id"]),
+                    ).fetchone()
+                if current is None:
+                    return
+                expired = datetime.fromisoformat(current["expires_at"]) <= datetime.now(UTC)
+                scanned = current["scanned_at"] is not None
+                if scanned or expired:
+                    yield f"event: status\ndata: {json.dumps({'scanned': scanned, 'expired': expired, 'expires_at': current['expires_at']})}\n\n"
+                    return
+                if loop.time() - last_heartbeat >= 10:
+                    yield ": keep-alive\n\n"
+                    last_heartbeat = loop.time()
+                await asyncio.sleep(1)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+        )
 
     @app.put("/api/v1/profile")
     def update_profile(

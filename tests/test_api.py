@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import sqlite3
 from datetime import datetime, time, timedelta
@@ -295,6 +296,10 @@ def test_cashier_cannot_redeem_an_expired_eco_id(tmp_path):
         issued = client.post("/api/v1/eco-id", headers=citizen_headers)
         with sqlite3.connect(client.app.state.database_path) as connection:
             connection.execute("UPDATE eco_id_tokens SET expires_at = ? WHERE code = ?", ("2020-01-01T00:00:00+00:00", issued.json()["code"]))
+        code = issued.json()["code"]
+        expired_status = client.get(f"/api/v1/eco-id/{code}/status", headers=citizen_headers)
+        with client.stream("GET", f"/api/v1/eco-id/{code}/events", headers=citizen_headers) as stream_response:
+            event_body = b"".join(stream_response.iter_bytes()).decode()
         login = client.post("/api/v1/auth/cashier/login", json={"username": "caja.cafe-marco", "password": "Viladecans"})
         cashier_headers = {"Authorization": f"Bearer {login.json()['token']}"}
         changed = client.put("/api/v1/cashier/password", json={"password": "clave-cajero-segura-23"}, headers=cashier_headers)
@@ -302,6 +307,10 @@ def test_cashier_cannot_redeem_an_expired_eco_id(tmp_path):
         response = client.post("/api/v1/cashier/eco-id/scan", json={"code": issued.json()["code"]}, headers=cashier_headers)
 
     assert response.status_code == 410
+    assert expired_status.status_code == 200
+    assert expired_status.json()["expired"] is True
+    assert stream_response.status_code == 200
+    assert '"expired": true' in event_body
 
 
 def test_eco_id_owner_can_check_scan_status(tmp_path):
@@ -319,6 +328,9 @@ def test_eco_id_owner_can_check_scan_status(tmp_path):
         cashier_headers = {"Authorization": f"Bearer {cashier_login.json()['token']}"}
         scanned = client.post("/api/v1/cashier/eco-id/scan", json={"code": code}, headers=cashier_headers)
         scanned_status = client.get(f"/api/v1/eco-id/{code}/status", headers=citizen_headers)
+        with client.stream("GET", f"/api/v1/eco-id/{code}/events", headers=citizen_headers) as event_response:
+            event_body = b"".join(event_response.iter_bytes()).decode()
+        foreign_events = client.get(f"/api/v1/eco-id/{code}/events", headers=other_citizen_headers)
 
     assert initial_status.status_code == 200
     assert initial_status.json()["scanned"] is False
@@ -326,6 +338,43 @@ def test_eco_id_owner_can_check_scan_status(tmp_path):
     assert scanned.status_code == 200
     assert scanned_status.status_code == 200
     assert scanned_status.json()["scanned"] is True
+    assert event_response.status_code == 200
+    assert event_response.headers["content-type"].startswith("text/event-stream")
+    assert 'data: {"scanned": true' in event_body
+    assert foreign_events.status_code == 404
+
+
+def test_cashier_scan_notifies_an_open_resident_event_stream(tmp_path):
+    with make_client(tmp_path) as client:
+        profile, citizen_headers = create_profile(client)
+        code = client.post("/api/v1/eco-id", headers=citizen_headers).json()["code"]
+        cashier_login = client.post("/api/v1/auth/cashier/login", json={"username": "caja.cafe-marco", "password": "Viladecans"})
+        cashier_headers = {"Authorization": f"Bearer {cashier_login.json()['token']}"}
+        client.put("/api/v1/cashier/password", json={"password": "clave-cajero-segura-23"}, headers=cashier_headers)
+        cashier_login = client.post("/api/v1/auth/cashier/login", json={"username": "caja.cafe-marco", "password": "clave-cajero-segura-23"})
+        cashier_headers = {"Authorization": f"Bearer {cashier_login.json()['token']}"}
+        connection = sqlite3.connect(client.app.state.database_path)
+        connection.row_factory = sqlite3.Row
+        citizen_profile = connection.execute("SELECT * FROM profiles WHERE id = ?", (profile["id"],)).fetchone()
+        events_route = next(route for route in client.app.routes if getattr(route, "path", None) == "/api/v1/eco-id/{code}/events")
+
+        async def scan_during_open_stream():
+            response = await events_route.endpoint(code, profile=citizen_profile)
+            events = response.body_iterator.__aiter__()
+            initial_event = await events.__anext__()
+            scan_result = client.post("/api/v1/cashier/eco-id/scan", json={"code": code}, headers=cashier_headers)
+            scanned_event = await events.__anext__()
+            await events.aclose()
+            return response, str(initial_event), str(scanned_event), scan_result
+
+        event_response, initial_event, scanned_event, scan = asyncio.run(scan_during_open_stream())
+        connection.close()
+
+    assert scan.status_code == 200
+    assert scan.json()["points"] == 10
+    assert event_response.media_type == "text/event-stream"
+    assert '"scanned": false' in initial_event
+    assert '"scanned": true' in scanned_event
 
 
 def test_cashier_dashboard_reports_only_its_coupon_and_eco_id_activity(tmp_path):

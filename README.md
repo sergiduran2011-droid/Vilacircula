@@ -20,7 +20,7 @@ The frontend is static and does not contain database credentials. Account, coupo
 - A cashier workspace with daily and weekly activity, a seven-day chart, recent validations, QR scanning, and manual code entry.
 - A resident wallet with active/redeemed coupon history and scannable coupon QR codes. In production, the merchant's authenticated cashier validates the QR; residents cannot mark their own coupons as redeemed.
 - Coupon validation scoped to the cashier's merchant. A successful redemption is recorded once and moves the coupon out of the active wallet.
-- Server-issued EcoID QR codes that expire after 45 seconds and can be used once. An authorized cashier scan awards 10 points to the associated account and confirms the scan in the resident's open EcoID screen.
+- Server-issued EcoID QR codes that expire after 45 seconds and can be used once. An authorized cashier scan awards 10 points to the associated account and confirms the scan in the resident's open EcoID screen through authenticated server events.
 - An administration dashboard for aggregate operational metrics and cashier provisioning.
 - PWA installation from the first sign-in screen and the first-login welcome card, with browser-native installation where available and device-specific instructions otherwise.
 
@@ -60,7 +60,7 @@ The leaderboard aggregates contribution points by school and shows the signed-in
 
 When a resident redeems an available reward, the API checks their balance, deducts the reward cost, and creates a single-use coupon in the wallet. Active coupons display a QR code and expiry; redeemed coupons move into the wallet's history. While an active coupon is open, the app checks whether the merchant has validated it and updates the view when its status changes.
 
-In production, the resident presents the coupon QR at the shop. An authenticated cashier scans it; the API checks that the cashier belongs to the coupon's merchant and prevents a second redemption. Resident self-redemption is disabled in production. The cashier's EcoID scanner is a separate flow: a resident displays a short-lived, single-use EcoID QR and an authorized cashier scan awards 10 points.
+In production, the resident presents the coupon QR at the shop. An authenticated cashier scans it; the API checks that the cashier belongs to the coupon's merchant and prevents a second redemption. Resident self-redemption is disabled in production. The cashier's EcoID scanner is a separate flow: a resident displays a short-lived, single-use EcoID QR and an authorized cashier scan awards 10 points. While the QR is open, the resident app receives an authenticated server-sent event when it is scanned; if that connection drops, it retries with backoff and checks status periodically. Returning to the app or regaining internet also triggers an immediate check. The QR panel shows connection, retry, expiry, and session-error states.
 
 ## Run locally
 
