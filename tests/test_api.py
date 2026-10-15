@@ -304,6 +304,30 @@ def test_cashier_cannot_redeem_an_expired_eco_id(tmp_path):
     assert response.status_code == 410
 
 
+def test_eco_id_owner_can_check_scan_status(tmp_path):
+    with make_client(tmp_path) as client:
+        _, citizen_headers = create_profile(client)
+        _, other_citizen_headers = create_profile(client, "laia")
+        issued = client.post("/api/v1/eco-id", headers=citizen_headers).json()
+        code = issued["code"]
+        initial_status = client.get(f"/api/v1/eco-id/{code}/status", headers=citizen_headers)
+        foreign_status = client.get(f"/api/v1/eco-id/{code}/status", headers=other_citizen_headers)
+        cashier_login = client.post("/api/v1/auth/cashier/login", json={"username": "caja.cafe-marco", "password": "Viladecans"})
+        cashier_headers = {"Authorization": f"Bearer {cashier_login.json()['token']}"}
+        client.put("/api/v1/cashier/password", json={"password": "clave-cajero-segura-23"}, headers=cashier_headers)
+        cashier_login = client.post("/api/v1/auth/cashier/login", json={"username": "caja.cafe-marco", "password": "clave-cajero-segura-23"})
+        cashier_headers = {"Authorization": f"Bearer {cashier_login.json()['token']}"}
+        scanned = client.post("/api/v1/cashier/eco-id/scan", json={"code": code}, headers=cashier_headers)
+        scanned_status = client.get(f"/api/v1/eco-id/{code}/status", headers=citizen_headers)
+
+    assert initial_status.status_code == 200
+    assert initial_status.json()["scanned"] is False
+    assert foreign_status.status_code == 404
+    assert scanned.status_code == 200
+    assert scanned_status.status_code == 200
+    assert scanned_status.json()["scanned"] is True
+
+
 def test_cashier_dashboard_reports_only_its_coupon_and_eco_id_activity(tmp_path):
     with make_client(tmp_path) as client:
         _, citizen_headers = create_profile(client)

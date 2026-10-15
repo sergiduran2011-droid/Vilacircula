@@ -20,7 +20,7 @@ The frontend is static and does not contain database credentials. Account, coupo
 - A cashier workspace with daily and weekly activity, a seven-day chart, recent validations, QR scanning, and manual code entry.
 - A resident wallet with active/redeemed coupon history and scannable coupon QR codes. In production, the merchant's authenticated cashier validates the QR; residents cannot mark their own coupons as redeemed.
 - Coupon validation scoped to the cashier's merchant. A successful redemption is recorded once and moves the coupon out of the active wallet.
-- Server-issued EcoID QR codes that expire after 45 seconds and can be used once. An authorized cashier scan awards 10 points to the associated account.
+- Server-issued EcoID QR codes that expire after 45 seconds and can be used once. An authorized cashier scan awards 10 points to the associated account and confirms the scan in the resident's open EcoID screen.
 - An administration dashboard for aggregate operational metrics and cashier provisioning.
 - PWA installation from the first sign-in screen and the first-login welcome card, with browser-native installation where available and device-specific instructions otherwise.
 
@@ -37,6 +37,8 @@ OpenStreetMap data confirms a mapped place and its coordinates, not a partnershi
 ### Badges and activity streaks
 
 The API builds the resident's progress summary from server-recorded point events; changing browser state cannot award a badge or increase a streak. Activity is grouped by calendar day in the `Europe/Madrid` time zone. The app shows both the current consecutive-day streak and the longest streak recorded for the account. The current streak remains active if there was a point event today or yesterday.
+
+The current streak counts consecutive calendar days with at least one server-recorded point event. It stays active if the most recent event was today or yesterday, and resets after a full day without an event. The longest streak is derived from the full event history; the 3-day and 7-day badges use that longest streak.
 
 The current badge milestones are:
 

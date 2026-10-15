@@ -892,6 +892,23 @@ def create_app(
             )
         return {"code": code, "expires_at": expires_at.isoformat(), "lifetime_seconds": 45}
 
+    @app.get("/api/v1/eco-id/{code}/status")
+    def get_eco_id_status(
+        code: str,
+        profile: sqlite3.Row = Depends(current_profile),
+    ) -> dict[str, object]:
+        with closing(connect()) as connection:
+            eco_id = connection.execute(
+                "SELECT scanned_at, expires_at FROM eco_id_tokens WHERE code = ? AND profile_id = ?",
+                (code, profile["id"]),
+            ).fetchone()
+        if eco_id is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="EcoID no encontrado.")
+        return {
+            "scanned": eco_id["scanned_at"] is not None,
+            "expires_at": eco_id["expires_at"],
+        }
+
     @app.put("/api/v1/profile")
     def update_profile(
         payload: ProfileUpdate,

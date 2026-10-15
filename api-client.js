@@ -17,7 +17,7 @@
   document.querySelector('.topbar').after(status);
   const style = document.createElement('link');
   style.rel = 'stylesheet';
-  style.href = './api-client.css?v=22';
+  style.href = './api-client.css?v=23';
   document.head.append(style);
   const cashierStyle = document.createElement('link');
   cashierStyle.rel = 'stylesheet';
@@ -894,9 +894,11 @@
   }
 
   let liveEcoIdTimer;
+  let liveEcoIdPollTimer;
 
   function closeLiveEcoId() {
     clearInterval(liveEcoIdTimer);
+    clearInterval(liveEcoIdPollTimer);
     document.querySelector('#live-ecoid-dialog')?.remove();
   }
 
@@ -915,6 +917,7 @@
     const errorNode = overlay.querySelector('#live-ecoid-error');
     let expiresAt = 0;
     let issuing = false;
+    let polling = false;
     const issueCode = async () => {
       if (issuing) return;
       issuing = true;
@@ -934,12 +937,42 @@
         issuing = false;
       }
     };
+    const checkScanStatus = async () => {
+      const code = overlay.querySelector('#live-ecoid-code').textContent;
+      if (polling || !code || !overlay.isConnected) return;
+      polling = true;
+      try {
+        const result = await request(`/eco-id/${encodeURIComponent(code)}/status`);
+        if (!overlay.isConnected || !result.scanned) return;
+        clearInterval(liveEcoIdTimer);
+        clearInterval(liveEcoIdPollTimer);
+        qrNode.replaceChildren();
+        countdown.textContent = '¡EcoID escaneado correctamente!';
+        overlay.querySelector('#live-ecoid-code').textContent = '';
+        errorNode.classList.remove('profile-error');
+        errorNode.classList.add('live-ecoid-success');
+        errorNode.textContent = 'Se han añadido 10 EcoPuntos a tu cuenta.';
+        if ('vibrate' in navigator) navigator.vibrate([80, 40, 100]);
+        notifyUser('EcoID escaneado correctamente', 'Se han añadido 10 EcoPuntos a tu cuenta.');
+        refreshWallet().catch(error => {
+          console.error('No se pudo actualizar el saldo después de validar el EcoID.', error);
+          setStatus('EcoID escaneado correctamente; no se pudo actualizar el saldo. Recarga la app para ver los puntos.', 'error');
+        });
+      } catch (error) {
+        if (!overlay.isConnected) return;
+        errorNode.textContent = getApiErrorMessage(error);
+        if (/401|403/.test(error.message)) clearInterval(liveEcoIdPollTimer);
+      } finally {
+        polling = false;
+      }
+    };
     await issueCode();
     liveEcoIdTimer = setInterval(() => {
       const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
       countdown.textContent = seconds ? `Se renueva en 00:${String(seconds).padStart(2, '0')}` : 'Renovando código…';
       if (seconds === 0) issueCode();
     }, 1000);
+    liveEcoIdPollTimer = setInterval(checkScanStatus, 2000);
   }
 
   async function refreshWallet() {
