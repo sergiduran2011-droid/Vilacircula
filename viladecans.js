@@ -21,7 +21,7 @@
   document.head.append(styleLink);
   const featuresStyleLink = document.createElement('link');
   featuresStyleLink.rel = 'stylesheet';
-  featuresStyleLink.href = './features.css?v=1';
+  featuresStyleLink.href = './features.css?v=3';
   document.head.append(featuresStyleLink);
 
   function loadScript(src) {
@@ -48,7 +48,12 @@
   function updateWelcomeDate() {
     const now = new Date();
     const hour = now.getHours();
-    const greeting = hour < 6 || hour >= 20 ? 'Buenas noches' : hour < 12 ? 'Buenos días' : 'Buenas tardes';
+    const catalan = window.vilaLanguage?.() !== 'es';
+    const greeting = hour < 6 || hour >= 20
+      ? catalan ? 'Bona nit' : 'Buenas noches'
+      : hour < 12
+        ? catalan ? 'Bon dia' : 'Buenos días'
+        : catalan ? 'Bona tarda' : 'Buenas tardes';
     const name = document.querySelector('.user b')?.textContent || '';
     const heading = document.querySelector('.welcome h1');
     if (heading) {
@@ -58,21 +63,23 @@
     }
     const dateLabel = document.querySelector('.welcome .eyebrow');
     if (dateLabel) {
-      dateLabel.textContent = new Intl.DateTimeFormat('es-ES', {
+      dateLabel.textContent = new Intl.DateTimeFormat(window.vilaLocale?.() || 'ca-ES', {
         weekday: 'long', day: 'numeric', month: 'long'
-      }).format(now).toLocaleUpperCase('es-ES');
+      }).format(now).toLocaleUpperCase(window.vilaLocale?.() || 'ca-ES');
     }
     const todayLabel = document.querySelector('#screen-home .section-head .eyebrow');
     if (todayLabel) {
-      const today = new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'short' }).format(now);
-      todayLabel.textContent = `HOY, ${today}`.toLocaleUpperCase('es-ES');
+      const today = new Intl.DateTimeFormat(window.vilaLocale?.() || 'ca-ES', { day: 'numeric', month: 'short' }).format(now);
+      todayLabel.textContent = `${catalan ? 'AVUI' : 'HOY'}, ${today}`.toLocaleUpperCase(window.vilaLocale?.() || 'ca-ES');
     }
     const cityTime = document.querySelector('.welcome .date');
     if (cityTime) {
-      const time = new Intl.DateTimeFormat('es-ES', { hour: '2-digit', minute: '2-digit' }).format(now);
+      const time = new Intl.DateTimeFormat(window.vilaLocale?.() || 'ca-ES', { hour: '2-digit', minute: '2-digit' }).format(now);
       cityTime.textContent = `VILADECANS · ${time}`;
     }
   }
+
+  window.addEventListener('vilacircula:languagechange', updateWelcomeDate);
 
   function setProfile() {
     document.querySelector('.avatar').textContent = 'SG';
@@ -89,7 +96,12 @@
     updateWelcomeDate();
   }
 
-  window.applyCitizenProfile = (name, school) => {
+  window.applyCitizenProfile = (name, school, role = 'student') => {
+    const canViewLeague = role === 'student' || role === 'admin';
+    document.body.dataset.role = role;
+    document.querySelectorAll('[data-screen="league"], #screen-league, .mini-league, .school-card').forEach(element => {
+      element.hidden = !canViewLeague;
+    });
     const nameParts = name.trim().split(/\s+/);
     const initials = nameParts.length > 1 ? `${nameParts[0][0]}${nameParts.at(-1)[0]}` : `${name[0]}${school[0]}`;
     document.querySelector('.avatar').textContent = initials.toUpperCase();
@@ -113,6 +125,7 @@
 
   function renderEngagement(engagement) {
     document.querySelector('.engagement-panel')?.remove();
+    if (!engagement) return;
     const panel = document.createElement('section');
     panel.className = 'engagement-panel';
     const badges = engagement?.badges || [];
@@ -146,21 +159,62 @@
     window.lucide?.createIcons();
   }
 
+  function renderPersonalImpact(impact, contribution) {
+    document.querySelector('.personal-impact')?.remove();
+    const panel = document.createElement('section');
+    panel.className = 'personal-impact';
+    panel.innerHTML = `
+      <div class="impact-heading">
+        <div><span class="eyebrow">TU IMPACTO EN VILADECANS</span><h2>Así ayudas a tu ciudad</h2></div>
+        <span class="impact-co2"><strong>${Number(impact.co2_avoided_kg || 0).toLocaleString(window.vilaLocale?.() || 'ca-ES', { maximumFractionDigits: 3 })}</strong><small>kg CO₂ evitados</small></span>
+      </div>
+      <div class="impact-metrics">
+        <div><strong>${Number(contribution || 0).toLocaleString(window.vilaLocale?.() || 'ca-ES')}</strong><small>EcoPunts aportats</small></div>
+        <div><strong>${Number(impact.eco_purchases || 0).toLocaleString(window.vilaLocale?.() || 'ca-ES')}</strong><small>Compres ECO verificades</small></div>
+        <div><strong>${Number(impact.steps || 0).toLocaleString(window.vilaLocale?.() || 'ca-ES')}</strong><small>Passos registrats</small></div>
+        <div><strong>${Number(impact.eco_route_km || 0).toLocaleString(window.vilaLocale?.() || 'ca-ES')}</strong><small>km d’EcoRuta</small></div>
+      </div>
+      <p>El CO₂ se estima con acciones verificadas. La sincronización de pasos y EcoRuta todavía no está conectada.</p>
+    `;
+    document.querySelector('#screen-home .lower')?.after(panel);
+  }
+
+  function renderConversionFactors(factors) {
+    document.querySelector('.conversion-factors-card')?.remove();
+    if (!factors) return;
+    const panel = document.createElement('section');
+    panel.className = 'conversion-factors-card';
+    panel.innerHTML = `
+      <span class="eyebrow">FACTORES DE CONVERSIÓN</span>
+      <div><strong>${Number(factors.steps_per_kg).toLocaleString(window.vilaLocale?.() || 'ca-ES')} passos</strong><span>= 1 kg CO₂ evitat</span></div>
+      <div><strong>1 compra ECO</strong><span>= ${Number(factors.eco_purchase_kg * 1000).toLocaleString(window.vilaLocale?.() || 'ca-ES')} g CO₂ evitats</span></div>
+      <div><strong>${Number(factors.eco_route_km_per_kg).toLocaleString(window.vilaLocale?.() || 'ca-ES')} km d’EcoRuta</strong><span>= 1 kg CO₂ evitat</span></div>
+    `;
+    document.querySelector('#screen-league .ranking-layout')?.after(panel);
+  }
+
   window.setCitizenDashboard = dashboard => {
     state.balance = dashboard.balance;
     state.contribution = dashboard.contribution;
     update();
     const stepCard = document.querySelector('.steps');
-    stepCard.querySelector('strong').textContent = `${dashboard.steps.count.toLocaleString('es-ES')} pasos`;
-    stepCard.querySelector('span').textContent = `de ${dashboard.steps.goal.toLocaleString('es-ES')}`;
+    stepCard.querySelector('strong').textContent = `${dashboard.steps.count.toLocaleString(window.vilaLocale?.() || 'ca-ES')} passos`;
+    stepCard.querySelector('span').textContent = `de ${dashboard.steps.goal.toLocaleString(window.vilaLocale?.() || 'ca-ES')}`;
     stepCard.parentElement.querySelector('.progress span').style.width = `${Math.min(100, dashboard.steps.count / dashboard.steps.goal * 100)}%`;
-    stepCard.parentElement.querySelector('.points').textContent = 'PENDIENTE';
-    stepCard.parentElement.querySelector('p').textContent = 'La sincronización de pasos todavía no está disponible en esta demo.';
+    const stepRewardLabel = document.querySelector('#step-reward-label');
+    if (stepRewardLabel) stepRewardLabel.textContent = dashboard.steps.rewarded ? '✓ +30 pts conseguidos' : '+30 pts al alcanzar meta';
+    const stepStatus = document.querySelector('#step-counter-status');
+    if (stepStatus) stepStatus.textContent = dashboard.steps.rewarded
+      ? '¡Meta diaria alcanzada! Tus 30 EcoPunts ya están en el saldo.'
+      : 'Estimación con el acelerómetro mientras la app está abierta.';
+    const stepGoal = document.querySelector('#step-goal');
+    if (stepGoal) stepGoal.textContent = `de ${dashboard.steps.goal.toLocaleString(window.vilaLocale?.() || 'ca-ES')}`;
     document.querySelector('#route-status').textContent = 'Los puntos de EcoRuta se mostrarán al conectarse el servicio municipal.';
     document.querySelector('.balance .trend').textContent = 'SALDO DE DEMOSTRACIÓN';
     document.querySelector('.habit:nth-child(2) h3').textContent = 'Compras verificadas';
     document.querySelector('.habit:nth-child(2) p').textContent = 'Aún no hay compras confirmadas por un comercio.';
-    document.querySelector('.school-note').textContent = 'Puntos acumulados en los perfiles registrados en esta demo.';
+    const schoolNote = document.querySelector('.school-note');
+    if (schoolNote) schoolNote.textContent = 'Puntos acumulados en los perfiles registrados en esta demo.';
     document.querySelectorAll('.panel .activity').forEach(activity => activity.remove());
     document.querySelector('#activity-empty')?.remove();
     if (dashboard.activity.length) {
@@ -175,7 +229,7 @@
         const title = document.createElement('strong');
         title.textContent = item.description;
         const detail = document.createElement('small');
-        detail.textContent = `${item.merchant} · ${new Intl.DateTimeFormat('es-ES', { hour: '2-digit', minute: '2-digit' }).format(new Date(item.created_at))}`;
+        detail.textContent = `${item.merchant} · ${new Intl.DateTimeFormat(window.vilaLocale?.() || 'ca-ES', { hour: '2-digit', minute: '2-digit' }).format(new Date(item.created_at))}`;
         copy.append(title, detail);
         const points = document.createElement('span');
         points.className = 'activity-points';
@@ -212,18 +266,23 @@
       name.textContent = school.school;
       const score = document.createElement('span');
       score.className = 'school-score';
-      score.textContent = school.points.toLocaleString('es-ES');
+      score.textContent = school.points.toLocaleString(window.vilaLocale?.() || 'ca-ES');
       const delta = document.createElement('span');
       delta.className = 'delta';
       delta.textContent = '—';
       row.append(position, name, score, delta);
       rows.append(row);
     });
-    document.querySelector('#screen-home .rank-pill').textContent = `#${dashboard.school_rank} DE ${dashboard.league.length}`;
-    document.querySelector('#screen-home .school-stats span:last-child b').textContent = `#${dashboard.personal_rank}`;
-    document.querySelector('#screen-league .personal .metrics > div:last-child strong').textContent = `#${dashboard.personal_rank}`;
-    document.querySelector('.school-note').textContent = 'Puntos sumados por instituto; el ranking no muestra datos personales.';
-    renderEngagement(dashboard.engagement);
+    if (dashboard.role === 'student' || dashboard.role === 'admin') {
+      document.querySelector('#screen-home .rank-pill').textContent = dashboard.school_rank ? `#${dashboard.school_rank} DE ${dashboard.league.length}` : 'LIGA DE INSTITUTOS';
+      document.querySelector('#screen-home .school-stats span:last-child b').textContent = dashboard.personal_rank ? `#${dashboard.personal_rank}` : '—';
+      document.querySelector('#screen-league .personal .metrics > div:last-child strong').textContent = dashboard.personal_rank ? `#${dashboard.personal_rank}` : '—';
+      if (schoolNote) schoolNote.textContent = 'Puntos sumados por instituto; el ranking no muestra datos personales.';
+    }
+    renderEngagement(dashboard.role === 'user' ? null : dashboard.engagement);
+    if (dashboard.role === 'user') renderPersonalImpact(dashboard.impact, dashboard.contribution);
+    else document.querySelector('.personal-impact')?.remove();
+    renderConversionFactors(dashboard.conversion_factors);
     save();
   };
 
@@ -291,7 +350,7 @@
     if (!cityMap || !shopMarkers) return;
     shopMarkers.clearLayers();
     shops.filter(shop => shop.latitude != null && shop.longitude != null && (category === 'Todos' || shop.category === category)).forEach(shop => {
-      const marker = L.marker([shop.latitude, shop.longitude]).bindPopup(`<strong>${shop.name}</strong><br>${shop.address}`);
+      const marker = L.marker([shop.latitude, shop.longitude]).bindPopup(`<strong>${shop.name}</strong><br>${shop.address || 'Ubicación no disponible'}`);
       marker.on('click', () => chooseShop(shop.name));
       marker.addTo(shopMarkers);
     });
@@ -300,7 +359,7 @@
   function renderShopList() {
     const visible = shops.filter(shop => category === 'Todos' || shop.category === category);
     document.querySelector('#filters').innerHTML = categories.map(item => `<button class="chip ${item === category ? 'active' : ''}" data-category="${item}">${item}</button>`).join('');
-    document.querySelector('#merchant-list').innerHTML = visible.map(shop => `<button class="merchant ${chosen?.name === shop.name ? 'selected' : ''}" data-shop="${shop.name}"><span class="merchant-logo">${shop.initials}</span><span class="merchant-info"><strong>${shop.name}</strong><small>${shop.is_demo ? 'Ejemplo · no confirmado' : `${shop.type} · ${shop.address}`}</small></span><span class="distance">${shop.distance || (shop.latitude == null ? 'Sin ubicación' : 'Activa ubicación')}</span></button>`).join('');
+    document.querySelector('#merchant-list').innerHTML = visible.map(shop => `<button class="merchant ${chosen?.name === shop.name ? 'selected' : ''}" data-shop="${shop.name}" aria-label="${shop.name}, ${shop.type || shop.category || 'Comercio local'}"><span class="merchant-logo" role="img" aria-label="Logotipo de ${shop.name}">${shop.initials}</span><span class="merchant-info"><strong>${shop.name}</strong><small>${shop.is_demo ? 'Ejemplo · no confirmado' : `${shop.type || shop.category || 'Comercio local'} · ${shop.address || 'Ubicación no disponible'}`}</small></span><span class="distance">${shop.distance || (shop.latitude == null ? 'Sin ubicación' : 'Activa ubicación')}</span></button>`).join('');
     renderShopPins();
   }
 
@@ -422,7 +481,7 @@
       return false;
     }
     const [coupon] = state.coupons.splice(index, 1);
-    state.redeemedCoupons.unshift({ ...coupon, redeemedAt: new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'short' }).format(new Date()) });
+    state.redeemedCoupons.unshift({ ...coupon, redeemedAt: new Intl.DateTimeFormat(window.vilaLocale?.() || 'ca-ES', { day: 'numeric', month: 'short' }).format(new Date()) });
     save();
     closeCouponModal();
     renderWallet();
@@ -472,7 +531,7 @@
             if (!code) status.textContent = 'Ese QR no es un cupón VilaCircula. Sigue enfocando el QR del vale.';
           }
         } catch (error) {
-          status.textContent = error.message || 'No pudimos leer el QR. Ajusta el enfoque e inténtalo de nuevo.';
+          status.textContent = 'No pudimos leer el QR. Ajusta el enfoque e inténtalo de nuevo.';
         }
         scannerFrame = requestAnimationFrame(scanFrame);
       };
@@ -480,7 +539,9 @@
     } catch (error) {
       status.textContent = error.message.includes('Permission') || error.name === 'NotAllowedError'
         ? 'Permite el acceso a la cámara para escanear el cupón.'
-        : error.message;
+        : /expir|caduc/i.test(error.message)
+          ? 'El código QR ha caducado. Genera uno nuevo y vuelve a escanearlo.'
+          : 'No se pudo iniciar el escáner. Comprueba los permisos de cámara y vuelve a intentarlo.';
     }
   }
 

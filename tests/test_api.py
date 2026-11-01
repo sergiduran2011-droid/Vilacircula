@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import sqlite3
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
@@ -12,6 +12,7 @@ from app import create_app
 def make_client(tmp_path, **options):
     database_path = options.pop("database_path", tmp_path / "test.sqlite3")
     google_client_id = options.pop("google_client_id", "test-google-client-id")
+    options.setdefault("school_registration_codes", {"Goar": "goar-test-code"})
     client = TestClient(create_app(database_path, google_client_id=google_client_id, **options))
 
     def fake_google_verifier(credential, client_id):
@@ -29,11 +30,18 @@ def make_client(tmp_path, **options):
     return client
 
 
+def student_birth_date():
+    return f"{date.today().year - 16}-01-01"
+
+
 def create_profile(client, username="sergi"):
     response = client.post("/api/v1/auth/google", json={
         "credential": f"google:{username}",
         "display_name": "Sergi",
         "school": "Goar",
+        "birth_date": student_birth_date(),
+        "school_code": "goar-test-code",
+        "legal_consent": True,
     })
     assert response.status_code == 200
     result = response.json()
@@ -71,7 +79,8 @@ def test_profile_has_no_email_and_is_stored_in_sqlite(tmp_path):
     assert stored.json()["username"] == "sergi"
     assert stored.json()["password_setup_required"] is False
     assert dashboard.json()["balance"] == 150
-    assert dashboard.json()["steps"]["is_demo"] is True
+    assert dashboard.json()["points_per_euro"] == 30
+    assert dashboard.json()["steps"]["is_demo"] is False
 
 
 def test_dashboard_reports_streaks_and_server_derived_badges(tmp_path):
@@ -113,6 +122,134 @@ def test_profile_requires_valid_school_and_authorization(tmp_path):
 
     assert invalid_school.status_code == 422
     assert unauthorized.status_code == 401
+
+
+def test_adult_profiles_get_personal_impact_without_school_league(tmp_path):
+    with make_client(tmp_path) as client:
+        registered = client.post("/api/v1/auth/google", json={
+            "credential": "google:adult",
+            "display_name": "Persona adulta",
+            "birth_date": "1990-01-01",
+        })
+        headers = {"Authorization": f"Bearer {registered.json()['token']}"}
+        dashboard = client.get("/api/v1/dashboard", headers=headers).json()
+
+    assert registered.status_code == 200
+    assert registered.json()["profile"]["role"] == "user"
+    assert registered.json()["profile"]["school"] == "General"
+    assert dashboard["league"] == []
+    assert dashboard["school_rank"] is None
+    assert dashboard["conversion_factors"] is None
+    assert dashboard["impact"] == {
+        "steps": 0,
+        "steps_total": 0,
+        "eco_purchases": 0,
+        "eco_route_km": 0,
+        "co2_avoided_kg": 0,
+    }
+
+
+def test_student_registration_requires_a_valid_school_code(tmp_path):
+    with make_client(tmp_path) as client:
+        missing_code = client.post("/api/v1/auth/google", json={
+            "credential": "google:student-no-code",
+            "display_name": "Estudiante",
+            "birth_date": student_birth_date(),
+        })
+        invalid_code = client.post("/api/v1/auth/google", json={
+            "credential": "google:student-bad-code",
+            "display_name": "Estudiante",
+            "birth_date": student_birth_date(),
+            "school_code": "incorrecto",
+        })
+        mismatched_school = client.post("/api/v1/auth/google", json={
+            "credential": "google:student-mismatched-school",
+            "display_name": "Estudiante",
+            "birth_date": student_birth_date(),
+            "school": "Sales",
+            "school_code": "goar-test-code",
+        })
+        valid_code = client.post("/api/v1/auth/google", json={
+            "credential": "google:student-valid",
+            "display_name": "Estudiante",
+            "birth_date": student_birth_date(),
+            "school_code": "goar-test-code",
+            "legal_consent": True,
+        })
+
+    assert missing_code.status_code == 422
+    assert invalid_code.status_code == 422
+    assert mismatched_school.status_code == 422
+    assert valid_code.status_code == 200
+    assert valid_code.json()["profile"]["role"] == "student"
+    assert valid_code.json()["profile"]["school"] == "Goar"
+
+
+def test_student_registration_requires_and_records_privacy_consent(tmp_path):
+    database_path = tmp_path / "test.sqlite3"
+    with make_client(tmp_path, database_path=database_path) as client:
+        missing_consent = client.post("/api/v1/auth/google", json={
+            "credential": "google:student-no-consent",
+            "display_name": "Estudiante",
+            "birth_date": student_birth_date(),
+            "school_code": "goar-test-code",
+        })
+        accepted = client.post("/api/v1/auth/google", json={
+            "credential": "google:student-consent",
+            "display_name": "Estudiante",
+            "birth_date": student_birth_date(),
+            "school_code": "goar-test-code",
+            "legal_consent": True,
+        })
+        with sqlite3.connect(database_path) as connection:
+            consent = connection.execute(
+                "SELECT privacy_consent_at FROM profiles WHERE google_sub = ?",
+                ("google:student-consent",),
+            ).fetchone()
+
+    assert missing_consent.status_code == 422
+    assert accepted.status_code == 200
+    assert consent is not None and consent[0]
+
+
+def test_student_cannot_change_school_without_registration_code(tmp_path):
+    with make_client(tmp_path) as client:
+        _, headers = create_profile(client)
+        changed = client.put("/api/v1/profile", json={
+            "display_name": "Sergi",
+            "school": "Sales",
+        }, headers=headers)
+        unchanged = client.get("/api/v1/profile", headers=headers)
+
+    assert changed.status_code == 403
+    assert unchanged.json()["school"] == "Goar"
+
+
+def test_admin_email_grants_admin_views_and_municipal_api_access(tmp_path):
+    with make_client(tmp_path, admin_emails={"admin@example.com"}) as client:
+        admin = client.post("/api/v1/auth/google", json={
+            "credential": "google:admin",
+            "display_name": "Administración",
+            "birth_date": "1990-01-01",
+        })
+        admin_headers = {"Authorization": f"Bearer {admin.json()['token']}"}
+        _, student_headers = create_profile(client, "student")
+        dashboard = client.get("/api/v1/dashboard", headers=admin_headers)
+        analytics = client.get("/api/v1/admin/analytics", headers=admin_headers)
+        denied = client.get("/api/v1/admin/analytics", headers=student_headers)
+
+    assert admin.status_code == 200
+    assert admin.json()["profile"]["role"] == "admin"
+    assert dashboard.json()["league"]
+    assert dashboard.json()["conversion_factors"] == {
+        "steps_per_kg": 10000,
+        "eco_purchase_kg": 0.006,
+        "eco_route_km_per_kg": 7.5,
+    }
+    assert analytics.status_code == 200
+    assert analytics.json()["conversion_factors"]["eco_purchase_kg"] == 0.006
+    assert analytics.json()["points_per_euro"] == 30
+    assert denied.status_code == 401
 
 
 def test_google_login_and_legacy_password_endpoints(tmp_path):
@@ -206,6 +343,74 @@ def test_demo_ecoid_scan_updates_balance_league_and_activity(tmp_path):
     assert dashboard["activity"][0]["is_demo"] is True
 
 
+def test_daily_steps_reward_is_awarded_once_at_goal(tmp_path):
+    database_path = tmp_path / "test.sqlite3"
+    with make_client(tmp_path, database_path=database_path) as client:
+        profile, headers = create_profile(client)
+        today = client.get("/api/v1/steps/today", headers=headers).json()
+        with sqlite3.connect(database_path) as connection:
+            connection.execute(
+                "UPDATE daily_step_counts SET updated_at = ? WHERE profile_id = ? AND activity_date = ?",
+                ("2020-01-01T00:00:00+00:00", profile["id"], today["activity_date"]),
+            )
+        reward = client.post(
+            "/api/v1/steps/sync",
+            json={"activity_date": today["activity_date"], "steps": 5000},
+            headers=headers,
+        )
+        duplicate = client.post(
+            "/api/v1/steps/sync",
+            json={"activity_date": today["activity_date"], "steps": 5000},
+            headers=headers,
+        )
+        dashboard = client.get("/api/v1/dashboard", headers=headers).json()
+        profile_after = client.get("/api/v1/profile", headers=headers).json()
+
+    assert reward.status_code == 200
+    assert reward.json()["rewarded_now"] is True
+    assert reward.json()["points_awarded"] == 30
+    assert duplicate.status_code == 200
+    assert duplicate.json()["rewarded_now"] is False
+    assert duplicate.json()["points_awarded"] == 0
+    assert dashboard["steps"] == {
+        "count": 5000,
+        "goal": 5000,
+        "source": "Estimación del acelerómetro de este dispositivo",
+        "reward_points": 30,
+        "rewarded": True,
+        "is_demo": False,
+    }
+    assert dashboard["impact"]["steps_total"] == 5000
+    assert dashboard["impact"]["co2_avoided_kg"] == 0.5
+    assert profile_after["balance"] == profile["balance"] + 30
+    assert profile_after["contribution"] == profile["contribution"] + 30
+
+
+def test_daily_steps_rejects_reversals_and_implausible_increases(tmp_path):
+    with make_client(tmp_path) as client:
+        _, headers = create_profile(client)
+        today = client.get("/api/v1/steps/today", headers=headers).json()
+        too_many_at_once = client.post(
+            "/api/v1/steps/sync",
+            json={"activity_date": today["activity_date"], "steps": 5000},
+            headers=headers,
+        )
+        small_increase = client.post(
+            "/api/v1/steps/sync",
+            json={"activity_date": today["activity_date"], "steps": 10},
+            headers=headers,
+        )
+        reversal = client.post(
+            "/api/v1/steps/sync",
+            json={"activity_date": today["activity_date"], "steps": 5},
+            headers=headers,
+        )
+
+    assert too_many_at_once.status_code == 422
+    assert small_increase.status_code == 200
+    assert reversal.status_code == 409
+
+
 def test_demo_ecoid_scan_is_forbidden_in_production(tmp_path, monkeypatch):
     monkeypatch.setenv("VILACIRCULA_ENV", "production")
     with make_client(tmp_path) as client:
@@ -268,14 +473,21 @@ def test_cashier_eco_id_award_is_authorized_single_use_and_updates_balance(tmp_p
         _, citizen_headers = create_profile(client)
         unauthorized_issue = client.post("/api/v1/eco-id")
         issued = client.post("/api/v1/eco-id", headers=citizen_headers)
+        eco_purchase_issued = client.post("/api/v1/eco-id", headers=citizen_headers)
         cashier_login = client.post("/api/v1/auth/cashier/login", json={"username": "caja.cafe-marco", "password": "Viladecans"})
         cashier_headers = {"Authorization": f"Bearer {cashier_login.json()['token']}"}
         before_password_change = client.post("/api/v1/cashier/eco-id/scan", json={"code": issued.json()["code"]}, headers=cashier_headers)
         changed = client.put("/api/v1/cashier/password", json={"password": "clave-cajero-segura-23"}, headers=cashier_headers)
         cashier_headers = {"Authorization": f"Bearer {changed.json()['token']}"}
         awarded = client.post("/api/v1/cashier/eco-id/scan", json={"code": issued.json()["code"]}, headers=cashier_headers)
+        verified_purchase = client.post(
+            "/api/v1/cashier/eco-id/scan",
+            json={"code": eco_purchase_issued.json()["code"], "eco_purchase": True},
+            headers=cashier_headers,
+        )
         replayed = client.post("/api/v1/cashier/eco-id/scan", json={"code": issued.json()["code"]}, headers=cashier_headers)
         profile = client.get("/api/v1/profile", headers=citizen_headers)
+        dashboard = client.get("/api/v1/dashboard", headers=citizen_headers)
         citizen_dashboard = client.get("/api/v1/cashier/dashboard", headers=citizen_headers)
 
     assert issued.status_code == 200
@@ -284,10 +496,42 @@ def test_cashier_eco_id_award_is_authorized_single_use_and_updates_balance(tmp_p
     assert before_password_change.status_code == 403
     assert awarded.status_code == 200
     assert awarded.json()["points"] == 10
-    assert awarded.json()["balance"] == 160
+    assert awarded.json()["eco_purchase"] is False
+    assert verified_purchase.json()["eco_purchase"] is True
+    assert verified_purchase.json()["balance"] == 170
     assert replayed.status_code == 409
-    assert profile.json()["balance"] == 160
+    assert profile.json()["balance"] == 170
+    assert dashboard.json()["impact"]["eco_purchases"] == 1
+    assert dashboard.json()["impact"]["co2_avoided_kg"] == 0.006
     assert citizen_dashboard.status_code == 401
+
+
+def test_demo_cashier_cannot_record_a_verified_eco_purchase(tmp_path):
+    with make_client(tmp_path) as client:
+        _, citizen_headers = create_profile(client)
+        issued = client.post("/api/v1/eco-id", headers=citizen_headers)
+        login = client.post(
+            "/api/v1/auth/cashier/login",
+            json={"username": "caja.papeleria-demo", "password": "Viladecans"},
+        )
+        cashier_headers = {"Authorization": f"Bearer {login.json()['token']}"}
+        changed = client.put(
+            "/api/v1/cashier/password",
+            json={"password": "clave-cajero-segura-23"},
+            headers=cashier_headers,
+        )
+        cashier_headers = {"Authorization": f"Bearer {changed.json()['token']}"}
+        scan = client.post(
+            "/api/v1/cashier/eco-id/scan",
+            json={"code": issued.json()["code"], "eco_purchase": True},
+            headers=cashier_headers,
+        )
+        dashboard = client.get("/api/v1/dashboard", headers=citizen_headers)
+
+    assert scan.status_code == 200
+    assert scan.json()["eco_purchase"] is False
+    assert dashboard.json()["impact"]["eco_purchases"] == 0
+    assert dashboard.json()["impact"]["co2_avoided_kg"] == 0
 
 
 def test_cashier_cannot_redeem_an_expired_eco_id(tmp_path):

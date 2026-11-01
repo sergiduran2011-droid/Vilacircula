@@ -11,7 +11,7 @@ import sqlite3
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import closing
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -82,6 +82,18 @@ def engagement_summary(activity_timestamps: list[str], contribution: int) -> dic
         "longest_streak": longest_streak,
         "badges": badges,
     }
+
+
+def age_on(birth_date: date, today: date | None = None) -> int:
+    current_date = today or datetime.now(LOCAL_TIMEZONE).date()
+    return current_date.year - birth_date.year - (
+        (current_date.month, current_date.day) < (birth_date.month, birth_date.day)
+    )
+
+
+def viladecans_date() -> date:
+    return datetime.now(LOCAL_TIMEZONE).date()
+
 
 MERCHANTS = (
     {
@@ -168,6 +180,10 @@ CREATE TABLE IF NOT EXISTS profiles (
     google_sub TEXT,
     display_name TEXT NOT NULL,
     school TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'student',
+    email TEXT,
+    birth_date TEXT,
+    privacy_consent_at TEXT,
     token_hash TEXT NOT NULL UNIQUE,
     balance INTEGER NOT NULL DEFAULT 150 CHECK (balance >= 0),
     contribution INTEGER NOT NULL DEFAULT 0 CHECK (contribution >= 0),
@@ -264,12 +280,21 @@ CREATE TABLE IF NOT EXISTS point_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS point_events_profile_created_idx ON point_events(profile_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS daily_step_counts (
+    profile_id TEXT NOT NULL REFERENCES profiles(id),
+    activity_date TEXT NOT NULL,
+    steps INTEGER NOT NULL DEFAULT 0 CHECK (steps >= 0),
+    updated_at TEXT NOT NULL,
+    rewarded_at TEXT,
+    PRIMARY KEY (profile_id, activity_date)
+);
 CREATE TABLE IF NOT EXISTS eco_id_tokens (
     code TEXT PRIMARY KEY,
     profile_id TEXT NOT NULL REFERENCES profiles(id),
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     scanned_at TEXT,
+    eco_purchase INTEGER NOT NULL DEFAULT 0 CHECK (eco_purchase IN (0, 1)),
     cashier_id TEXT REFERENCES cashier_users(id)
 );
 CREATE INDEX IF NOT EXISTS eco_id_tokens_profile_created_idx ON eco_id_tokens(profile_id, created_at DESC);
@@ -278,7 +303,7 @@ CREATE INDEX IF NOT EXISTS eco_id_tokens_profile_created_idx ON eco_id_tokens(pr
 
 class ProfileUpdate(BaseModel):
     display_name: str = Field(min_length=1, max_length=32)
-    school: str = Field(min_length=1, max_length=40)
+    school: str | None = Field(default=None, min_length=1, max_length=40)
 
 
 class LoginPayload(BaseModel):
@@ -292,6 +317,14 @@ class GoogleAuthPayload(BaseModel):
     password: str | None = Field(default=None, min_length=1, max_length=128)
     display_name: str | None = Field(default=None, min_length=1, max_length=32)
     school: str | None = Field(default=None, min_length=1, max_length=40)
+    birth_date: date | None = None
+    school_code: str | None = Field(default=None, min_length=1, max_length=64)
+    legal_consent: bool = False
+
+
+class StepCountSync(BaseModel):
+    activity_date: date
+    steps: int = Field(ge=0, le=100000)
 
 
 class CredentialsUpdate(BaseModel):
@@ -320,6 +353,7 @@ class CouponScan(BaseModel):
 
 class EcoIdScan(BaseModel):
     code: str = Field(min_length=37, max_length=37, pattern=r"^VCID-[A-F0-9]{32}$")
+    eco_purchase: bool = False
 
 
 PASSWORD_SCRYPT_N = 2**14
@@ -389,6 +423,7 @@ def public_profile(profile: sqlite3.Row) -> dict[str, object]:
         "id": profile["id"],
         "display_name": profile["display_name"],
         "school": profile["school"],
+        "role": profile["role"],
         "username": profile["username"],
         "balance": profile["balance"],
         "contribution": profile["contribution"],
@@ -396,6 +431,18 @@ def public_profile(profile: sqlite3.Row) -> dict[str, object]:
         "has_password": profile["password_hash"] is not None,
         "is_demo": True,
     }
+
+
+CO2_CONVERSION_FACTORS = {
+    "steps_per_kg": 10000,
+    "eco_purchase_kg": 0.006,
+    "eco_route_km_per_kg": 7.5,
+}
+ECOPOINTS_PER_EURO = 30
+DAILY_STEP_GOAL = 5000
+DAILY_STEP_REWARD = 30
+MAX_STEP_RATE_PER_SECOND = 5
+STEP_SYNC_TOLERANCE = 30
 
 
 def public_coupon(row: sqlite3.Row) -> dict[str, object]:
@@ -417,6 +464,8 @@ def create_app(
     allow_self_redeem: bool | None = None,
     admin_key: str | None = None,
     google_client_id: str | None = None,
+    admin_emails: set[str] | frozenset[str] | None = None,
+    school_registration_codes: dict[str, str] | None = None,
 ) -> FastAPI:
     config = AppConfig.from_env(
         database_path=database_path,
@@ -424,6 +473,8 @@ def create_app(
         allow_self_redeem=allow_self_redeem,
         admin_key=admin_key,
         google_client_id=google_client_id,
+        admin_emails=admin_emails,
+        school_registration_codes=school_registration_codes,
     )
     db_path = config.database_path
     key = config.merchant_key
@@ -445,21 +496,37 @@ def create_app(
             connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS google_sub TEXT")
             connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS username TEXT")
             connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS password_hash TEXT")
+            connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'student'")
+            connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS email TEXT")
+            connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS birth_date TEXT")
+            connection.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS privacy_consent_at TEXT")
             connection.execute("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS merchant_id TEXT REFERENCES merchants(id)")
             connection.execute("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS redeemed_by TEXT REFERENCES cashier_users(id)")
+            connection.execute("ALTER TABLE eco_id_tokens ADD COLUMN IF NOT EXISTS eco_purchase INTEGER NOT NULL DEFAULT 0")
         else:
             profile_columns = {row["name"] for row in connection.execute("PRAGMA table_info(profiles)")}
             coupon_columns = {row["name"] for row in connection.execute("PRAGMA table_info(coupons)")}
+            eco_id_columns = {row["name"] for row in connection.execute("PRAGMA table_info(eco_id_tokens)")}
         if not is_postgres_url(config.database_url) and "google_sub" not in profile_columns:
             connection.execute("ALTER TABLE profiles ADD COLUMN google_sub TEXT")
         if not is_postgres_url(config.database_url) and "username" not in profile_columns:
             connection.execute("ALTER TABLE profiles ADD COLUMN username TEXT")
         if not is_postgres_url(config.database_url) and "password_hash" not in profile_columns:
             connection.execute("ALTER TABLE profiles ADD COLUMN password_hash TEXT")
+        if not is_postgres_url(config.database_url) and "role" not in profile_columns:
+            connection.execute("ALTER TABLE profiles ADD COLUMN role TEXT NOT NULL DEFAULT 'student'")
+        if not is_postgres_url(config.database_url) and "email" not in profile_columns:
+            connection.execute("ALTER TABLE profiles ADD COLUMN email TEXT")
+        if not is_postgres_url(config.database_url) and "birth_date" not in profile_columns:
+            connection.execute("ALTER TABLE profiles ADD COLUMN birth_date TEXT")
+        if not is_postgres_url(config.database_url) and "privacy_consent_at" not in profile_columns:
+            connection.execute("ALTER TABLE profiles ADD COLUMN privacy_consent_at TEXT")
         if not is_postgres_url(config.database_url) and "merchant_id" not in coupon_columns:
             connection.execute("ALTER TABLE coupons ADD COLUMN merchant_id TEXT REFERENCES merchants(id)")
         if not is_postgres_url(config.database_url) and "redeemed_by" not in coupon_columns:
             connection.execute("ALTER TABLE coupons ADD COLUMN redeemed_by TEXT REFERENCES cashier_users(id)")
+        if not is_postgres_url(config.database_url) and "eco_purchase" not in eco_id_columns:
+            connection.execute("ALTER TABLE eco_id_tokens ADD COLUMN eco_purchase INTEGER NOT NULL DEFAULT 0 CHECK (eco_purchase IN (0, 1))")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS profiles_username_idx ON profiles(username) WHERE username IS NOT NULL")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS profiles_google_sub_idx ON profiles(google_sub) WHERE google_sub IS NOT NULL")
         legacy_profiles = connection.execute("SELECT id, display_name, token_hash, username, password_hash FROM profiles").fetchall()
@@ -632,6 +699,28 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Vincula una cuenta de Google para continuar.")
         return profile
 
+    def authorize_admin(
+        admin_secret: str | None,
+        credentials: HTTPAuthorizationCredentials | None = None,
+    ) -> None:
+        if admin_secret_key and secrets.compare_digest(admin_secret or "", admin_secret_key):
+            return
+        if credentials and credentials.scheme.lower() == "bearer":
+            with closing(connect()) as connection:
+                profile = connection.execute(
+                    "SELECT profiles.role, profiles.email, auth_sessions.expires_at FROM auth_sessions JOIN profiles ON profiles.id = auth_sessions.profile_id WHERE auth_sessions.token_hash = ? AND auth_sessions.subject_type = 'citizen'",
+                    (token_digest(credentials.credentials),),
+                ).fetchone()
+            if (
+                profile
+                and profile["role"] == "admin"
+                and profile["email"]
+                and profile["email"].casefold() in config.admin_emails
+                and datetime.fromisoformat(profile["expires_at"]) > datetime.now(UTC)
+            ):
+                return
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credencial municipal no válida.")
+
     def current_cashier(
         credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     ) -> sqlite3.Row:
@@ -712,6 +801,16 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google no confirmó una cuenta de correo válida.")
         return google_sub, email, google_name if isinstance(google_name, str) else ""
 
+    def role_for_account(email: str, school: str, birth_date: str | None, fallback: str = "user") -> str:
+        if email.casefold() in config.admin_emails:
+            return "admin"
+        if birth_date:
+            registered_birth_date = date.fromisoformat(birth_date)
+            return "student" if age_on(registered_birth_date) < 18 and school in SCHOOLS else "user"
+        if fallback in {"student", "user"}:
+            return fallback
+        return "student" if school in SCHOOLS else "user"
+
     @app.get("/api/v1/auth/google/link-status")
     def google_link_status(profile: sqlite3.Row = Depends(profile_for_google_link)) -> dict[str, object]:
         return {
@@ -731,12 +830,15 @@ def create_app(
         google_sub, email, _ = verified_google_claims(payload.credential, request)
         with closing(connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
-            current = connection.execute("SELECT google_sub FROM profiles WHERE id = ?", (profile["id"],)).fetchone()
+            current = connection.execute("SELECT google_sub, school, birth_date, role FROM profiles WHERE id = ?", (profile["id"],)).fetchone()
             if current is None or current["google_sub"] is not None:
                 connection.rollback()
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Este perfil ya tiene una cuenta de Google vinculada.")
             try:
-                connection.execute("UPDATE profiles SET google_sub = ? WHERE id = ? AND google_sub IS NULL", (google_sub, profile["id"]))
+                connection.execute(
+                    "UPDATE profiles SET google_sub = ?, email = ?, role = ? WHERE id = ? AND google_sub IS NULL",
+                    (google_sub, email.casefold(), role_for_account(email, current["school"], current["birth_date"], current["role"]), profile["id"]),
+                )
             except sqlite3.IntegrityError as error:
                 connection.rollback()
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esta cuenta de Google ya está vinculada a otro perfil.") from error
@@ -764,8 +866,12 @@ def create_app(
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="El acceso con usuario y contraseña ya no está disponible. Inicia sesión con Google.")
 
     @app.get("/api/v1/auth/google/config")
-    def google_auth_config() -> dict[str, str]:
-        return {"client_id": config.google_client_id}
+    def google_auth_config() -> dict[str, object]:
+        return {
+            "client_id": config.google_client_id,
+            "schools": sorted(config.school_registration_codes),
+            "student_registration_enabled": bool(config.school_registration_codes),
+        }
 
     @app.post("/api/v1/auth/google")
     def google_login(payload: GoogleAuthPayload, request: Request) -> dict[str, object]:
@@ -777,12 +883,24 @@ def create_app(
             connection.execute("BEGIN IMMEDIATE")
             profile = connection.execute("SELECT * FROM profiles WHERE google_sub = ?", (google_sub,)).fetchone()
             if profile is not None:
+                role = role_for_account(email, profile["school"], profile["birth_date"], profile["role"])
+                school = profile["school"]
+                if role == "user" and profile["birth_date"] and age_on(date.fromisoformat(profile["birth_date"])) >= 18:
+                    school = "General"
+                connection.execute(
+                    "UPDATE profiles SET email = ?, role = ?, school = ? WHERE id = ?",
+                    (email.casefold(), role, school, profile["id"]),
+                )
+                profile = connection.execute("SELECT * FROM profiles WHERE id = ?", (profile["id"],)).fetchone()
                 token = issue_session("citizen", profile["id"], connection)
                 connection.commit()
                 return {"token": token, "profile": public_profile(profile)}
 
             linking_existing = payload.username is not None or payload.password is not None
-            creating_profile = payload.display_name is not None or payload.school is not None
+            creating_profile = any(
+                value is not None
+                for value in (payload.display_name, payload.school, payload.birth_date, payload.school_code)
+            )
             if linking_existing and creating_profile:
                 connection.rollback()
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Elige vincular tu perfil actual o crear uno nuevo.")
@@ -801,16 +919,46 @@ def create_app(
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No se pudo vincular el perfil. Comprueba tu usuario y contraseña.")
                 profile_id = existing["id"]
                 try:
-                    connection.execute("UPDATE profiles SET google_sub = ? WHERE id = ?", (google_sub, profile_id))
+                    connection.execute(
+                        "UPDATE profiles SET google_sub = ?, email = ?, role = ? WHERE id = ?",
+                        (google_sub, email.casefold(), role_for_account(email, existing["school"], existing["birth_date"], existing["role"]), profile_id),
+                    )
                 except sqlite3.IntegrityError as error:
                     connection.rollback()
                     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esta cuenta de Google ya está vinculada a otro perfil.") from error
             elif creating_profile:
                 display_name = (payload.display_name or str(google_name or "")).strip()
-                school = (payload.school or "").strip()
-                if not display_name or school not in SCHOOLS:
+                if not display_name or payload.birth_date is None:
                     connection.rollback()
-                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Escribe tu nombre y selecciona un instituto de Viladecans.")
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Escribe tu nombre y fecha de nacimiento.")
+                if payload.birth_date > datetime.now(LOCAL_TIMEZONE).date():
+                    connection.rollback()
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La fecha de nacimiento no puede ser futura.")
+                if age_on(payload.birth_date) < 18:
+                    if not payload.legal_consent:
+                        connection.rollback()
+                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Debes aceptar la política de privacidad para crear una cuenta de estudiante.")
+                    school_code = (payload.school_code or "").strip().casefold()
+                    school = next(
+                        (name for name, code in config.school_registration_codes.items() if secrets.compare_digest(school_code.encode(), code.encode())),
+                        None,
+                    )
+                    if not config.school_registration_codes:
+                        connection.rollback()
+                        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="El registro de estudiantes todavía no está configurado.")
+                    if school is None:
+                        connection.rollback()
+                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El código de centro no es válido.")
+                    if payload.school is not None and payload.school.strip() != school:
+                        connection.rollback()
+                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El código no corresponde al instituto seleccionado.")
+                else:
+                    if payload.school_code or payload.school:
+                        connection.rollback()
+                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Las personas adultas no necesitan un código ni seleccionar un instituto.")
+                    school = "General"
+                role = role_for_account(email, school, payload.birth_date.isoformat())
+                privacy_consent_at = timestamp() if role == "student" else None
                 email_name = email.split("@", 1)[0]
                 base_username = re.sub(r"[^a-z0-9._-]+", "", normalize_username(email_name))[:18].strip("._-")
                 base_username = base_username if len(base_username) >= 3 else f"eco{google_sub[:8].lower()}"
@@ -823,8 +971,8 @@ def create_app(
                 profile_id = str(uuid.uuid4())
                 try:
                     connection.execute(
-                        "INSERT INTO profiles (id, google_sub, display_name, school, token_hash, balance, contribution, created_at, username, password_hash) VALUES (?, ?, ?, ?, ?, 150, 0, ?, ?, NULL)",
-                        (profile_id, google_sub, display_name[:32], school, token_digest(secrets.token_urlsafe(32)), timestamp(), username),
+                        "INSERT INTO profiles (id, google_sub, display_name, school, role, email, birth_date, privacy_consent_at, token_hash, balance, contribution, created_at, username, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 150, 0, ?, ?, NULL)",
+                        (profile_id, google_sub, display_name[:32], school, role, email.casefold(), payload.birth_date.isoformat(), privacy_consent_at, token_digest(secrets.token_urlsafe(32)), timestamp(), username),
                     )
                 except sqlite3.IntegrityError as error:
                     connection.rollback()
@@ -881,6 +1029,98 @@ def create_app(
     @app.get("/api/v1/profile")
     def get_profile(profile: sqlite3.Row = Depends(current_profile)) -> dict[str, object]:
         return public_profile(profile)
+
+    @app.get("/api/v1/steps/today")
+    def get_today_steps(profile: sqlite3.Row = Depends(current_profile)) -> dict[str, object]:
+        activity_date = viladecans_date().isoformat()
+        now = timestamp()
+        with closing(connect()) as connection:
+            connection.execute(
+                "INSERT INTO daily_step_counts (profile_id, activity_date, steps, updated_at) VALUES (?, ?, 0, ?) ON CONFLICT(profile_id, activity_date) DO NOTHING",
+                (profile["id"], activity_date, now),
+            )
+            step_record = connection.execute(
+                "SELECT steps, rewarded_at FROM daily_step_counts WHERE profile_id = ? AND activity_date = ?",
+                (profile["id"], activity_date),
+            ).fetchone()
+        return {
+            "activity_date": activity_date,
+            "steps": step_record["steps"],
+            "goal": DAILY_STEP_GOAL,
+            "reward_points": DAILY_STEP_REWARD,
+            "rewarded": step_record["rewarded_at"] is not None,
+            "source": "device_motion_estimate",
+        }
+
+    @app.post("/api/v1/steps/sync")
+    def sync_today_steps(
+        payload: StepCountSync,
+        profile: sqlite3.Row = Depends(current_profile),
+    ) -> dict[str, object]:
+        activity_date = viladecans_date().isoformat()
+        if payload.activity_date.isoformat() != activity_date:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El día de actividad ha cambiado. Sincroniza el contador actualizado.")
+
+        now = datetime.now(UTC)
+        now_iso = now.isoformat()
+        with closing(connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO daily_step_counts (profile_id, activity_date, steps, updated_at) VALUES (?, ?, 0, ?) ON CONFLICT(profile_id, activity_date) DO NOTHING",
+                (profile["id"], activity_date, now_iso),
+            )
+            step_record = connection.execute(
+                "SELECT steps, updated_at, rewarded_at FROM daily_step_counts WHERE profile_id = ? AND activity_date = ?"
+                + (" FOR UPDATE" if is_postgres_url(config.database_url) else ""),
+                (profile["id"], activity_date),
+            ).fetchone()
+            if payload.steps < step_record["steps"]:
+                connection.rollback()
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El contador de pasos no puede retroceder durante el día.")
+            elapsed_seconds = max(0, (now - datetime.fromisoformat(step_record["updated_at"])).total_seconds())
+            allowed_increase = int(elapsed_seconds * MAX_STEP_RATE_PER_SECOND) + STEP_SYNC_TOLERANCE
+            if payload.steps - step_record["steps"] > allowed_increase:
+                connection.rollback()
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El incremento de pasos supera el ritmo máximo permitido. Sigue caminando y vuelve a sincronizar.")
+
+            rewarded_now = step_record["rewarded_at"] is None and payload.steps >= DAILY_STEP_GOAL
+            connection.execute(
+                "UPDATE daily_step_counts SET steps = ?, updated_at = ?, rewarded_at = ? WHERE profile_id = ? AND activity_date = ?",
+                (
+                    payload.steps,
+                    now_iso,
+                    now_iso if rewarded_now else step_record["rewarded_at"],
+                    profile["id"],
+                    activity_date,
+                ),
+            )
+            if rewarded_now:
+                connection.execute(
+                    "UPDATE profiles SET balance = balance + ?, contribution = contribution + ? WHERE id = ?",
+                    (DAILY_STEP_REWARD, DAILY_STEP_REWARD, profile["id"]),
+                )
+                connection.execute(
+                    "INSERT INTO point_events (id, profile_id, description, merchant, points, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (str(uuid.uuid4()), profile["id"], "Meta diaria de pasos alcanzada", "Actividad del dispositivo", DAILY_STEP_REWARD, now_iso),
+                )
+            current_profile_values = connection.execute(
+                "SELECT balance, contribution FROM profiles WHERE id = ?",
+                (profile["id"],),
+            ).fetchone()
+            connection.commit()
+
+        return {
+            "activity_date": activity_date,
+            "steps": payload.steps,
+            "goal": DAILY_STEP_GOAL,
+            "reward_points": DAILY_STEP_REWARD,
+            "rewarded": step_record["rewarded_at"] is not None or rewarded_now,
+            "rewarded_now": rewarded_now,
+            "points_awarded": DAILY_STEP_REWARD if rewarded_now else 0,
+            "balance": current_profile_values["balance"],
+            "contribution": current_profile_values["contribution"],
+            "source": "device_motion_estimate",
+        }
 
     @app.post("/api/v1/eco-id")
     def issue_eco_id(profile: sqlite3.Row = Depends(current_profile)) -> dict[str, object]:
@@ -963,12 +1203,19 @@ def create_app(
         profile: sqlite3.Row = Depends(current_profile),
     ) -> dict[str, object]:
         display_name = payload.display_name.strip()
-        school = payload.school.strip()
-        if not display_name or school not in SCHOOLS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Revisa el nombre y el instituto seleccionados.")
+        if not display_name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Escribe tu nombre o apodo.")
+        if profile["role"] == "student":
+            if payload.school is not None and payload.school.strip() != profile["school"]:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="El instituto solo puede asignarse mediante un código de centro válido.")
+            school = profile["school"]
+        else:
+            if payload.school is not None:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este perfil no pertenece a un instituto.")
+            school = profile["school"]
         with closing(connect()) as connection:
             connection.execute("UPDATE profiles SET display_name = ?, school = ? WHERE id = ?", (display_name, school, profile["id"]))
-        return {"id": profile["id"], "display_name": display_name, "school": school}
+        return {"id": profile["id"], "display_name": display_name, "school": school, "role": profile["role"]}
 
     @app.post("/api/v1/auth/cashier/login")
     def cashier_login(payload: LoginPayload, request: Request) -> dict[str, object]:
@@ -1039,9 +1286,10 @@ def create_app(
     @app.get("/api/v1/dashboard")
     def dashboard(profile: sqlite3.Row = Depends(current_profile)) -> dict[str, object]:
         with closing(connect()) as connection:
+            can_view_league = profile["role"] in {"student", "admin"}
             schools = connection.execute(
-                "SELECT school, SUM(contribution) AS points FROM profiles GROUP BY school ORDER BY points DESC, school ASC"
-            ).fetchall()
+                "SELECT school, SUM(contribution) AS points FROM profiles WHERE role = 'student' AND school <> 'General' GROUP BY school ORDER BY points DESC, school ASC"
+            ).fetchall() if can_view_league else []
             events = connection.execute(
                 "SELECT description, merchant, points, created_at FROM point_events WHERE profile_id = ? ORDER BY created_at DESC LIMIT 8",
                 (profile["id"],),
@@ -1050,21 +1298,63 @@ def create_app(
                 "SELECT created_at FROM point_events WHERE profile_id = ?",
                 (profile["id"],),
             ).fetchall()
-            personal_rank = connection.execute(
-                "SELECT COUNT(*) + 1 AS rank FROM profiles WHERE school = ? AND contribution > ?",
-                (profile["school"], profile["contribution"]),
-            ).fetchone()["rank"]
+            personal_rank = None
+            if profile["role"] == "student":
+                personal_rank = connection.execute(
+                    "SELECT COUNT(*) + 1 AS rank FROM profiles WHERE role = 'student' AND school = ? AND contribution > ?",
+                    (profile["school"], profile["contribution"]),
+                ).fetchone()["rank"]
+            eco_purchases = connection.execute(
+                "SELECT COUNT(*) AS total FROM eco_id_tokens WHERE profile_id = ? AND scanned_at IS NOT NULL AND eco_purchase = 1",
+                (profile["id"],),
+            ).fetchone()["total"]
+            steps_today = connection.execute(
+                "SELECT steps FROM daily_step_counts WHERE profile_id = ? AND activity_date = ?",
+                (profile["id"], viladecans_date().isoformat()),
+            ).fetchone()
+            step_totals = connection.execute(
+                "SELECT COALESCE(SUM(steps), 0) AS total FROM daily_step_counts WHERE profile_id = ?",
+                (profile["id"],),
+            ).fetchone()["total"]
+            steps_rewarded_today = connection.execute(
+                "SELECT rewarded_at FROM daily_step_counts WHERE profile_id = ? AND activity_date = ?",
+                (profile["id"], viladecans_date().isoformat()),
+            ).fetchone()
         board = [{"school": row["school"], "points": row["points"], "is_demo": True} for row in schools]
-        own_rank = next((index for index, row in enumerate(board, 1) if row["school"] == profile["school"]), 1)
+        own_rank = next((index for index, row in enumerate(board, 1) if row["school"] == profile["school"]), None)
+        steps_count = steps_today["steps"] if steps_today else 0
+        eco_route_km = 0
+        co2_avoided_kg = (
+            step_totals / CO2_CONVERSION_FACTORS["steps_per_kg"]
+            + eco_purchases * CO2_CONVERSION_FACTORS["eco_purchase_kg"]
+            + eco_route_km / CO2_CONVERSION_FACTORS["eco_route_km_per_kg"]
+        )
         return {
             "balance": profile["balance"],
             "contribution": profile["contribution"],
-            "steps": {"count": 0, "goal": 8000, "source": "Sincronización pendiente", "is_demo": True},
+            "role": profile["role"],
+            "steps": {
+                "count": steps_count,
+                "goal": DAILY_STEP_GOAL,
+                "source": "Estimación del acelerómetro de este dispositivo",
+                "reward_points": DAILY_STEP_REWARD,
+                "rewarded": bool(steps_rewarded_today and steps_rewarded_today["rewarded_at"]),
+                "is_demo": False,
+            },
             "school": profile["school"],
             "school_rank": own_rank,
             "personal_rank": personal_rank,
             "school_points": next((row["points"] for row in board if row["school"] == profile["school"]), 0),
             "league": board,
+            "impact": {
+                "steps": steps_count,
+                "steps_total": step_totals,
+                "eco_purchases": eco_purchases,
+                "eco_route_km": eco_route_km,
+                "co2_avoided_kg": round(co2_avoided_kg, 3),
+            },
+            "conversion_factors": CO2_CONVERSION_FACTORS if can_view_league else None,
+            "points_per_euro": ECOPOINTS_PER_EURO,
             "engagement": engagement_summary(
                 [row["created_at"] for row in activity_timestamps],
                 profile["contribution"],
@@ -1212,9 +1502,10 @@ def create_app(
             if datetime.fromisoformat(eco_id["expires_at"]) <= now:
                 connection.rollback()
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail="El EcoID ha caducado. Pide a la persona que genere otro.")
+            eco_purchase = bool(payload.eco_purchase and not cashier["merchant_is_demo"])
             claimed = connection.execute(
-                "UPDATE eco_id_tokens SET scanned_at = ?, cashier_id = ? WHERE code = ? AND scanned_at IS NULL AND expires_at > ?",
-                (scanned_at, cashier["id"], payload.code, scanned_at),
+                "UPDATE eco_id_tokens SET scanned_at = ?, eco_purchase = ?, cashier_id = ? WHERE code = ? AND scanned_at IS NULL AND expires_at > ?",
+                (scanned_at, int(eco_purchase), cashier["id"], payload.code, scanned_at),
             )
             if claimed.rowcount != 1:
                 connection.rollback()
@@ -1236,13 +1527,14 @@ def create_app(
             target_type="profile",
             target_id=eco_id["profile_id"],
             message="EcoID validado · +10 puntos",
-            metadata={"merchant_id": cashier["merchant_id"], "points": 10},
+            metadata={"merchant_id": cashier["merchant_id"], "points": 10, "eco_purchase": eco_purchase},
         )
         return {
             "display_name": person["display_name"],
             "points": 10,
             "balance": person["balance"],
             "merchant": cashier["merchant_name"],
+            "eco_purchase": eco_purchase,
             "is_demo": bool(cashier["merchant_is_demo"]),
         }
 
@@ -1250,9 +1542,9 @@ def create_app(
     def provision_cashier(
         payload: CashierProvision,
         admin_secret: Annotated[str | None, Header(alias="X-Admin-Key")] = None,
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     ) -> dict[str, object]:
-        if not admin_secret_key or not secrets.compare_digest(admin_secret or "", admin_secret_key):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credencial municipal no válida.")
+        authorize_admin(admin_secret, credentials)
         username = normalize_username(payload.username)
         with closing(connect()) as connection:
             merchant = connection.execute("SELECT id, name FROM merchants WHERE id = ?", (payload.merchant_id,)).fetchone()
@@ -1270,19 +1562,41 @@ def create_app(
         return {"id": cashier_id, "username": username, "merchant": merchant["name"], "must_change_password": True}
 
     @app.get("/api/v1/admin/audit")
-    def admin_audit(admin_secret: Annotated[str | None, Header(alias="X-Admin-Key")] = None) -> dict[str, object]:
-        if not admin_secret_key or not secrets.compare_digest(admin_secret or "", admin_secret_key):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credencial municipal no válida.")
+    def admin_audit(
+        admin_secret: Annotated[str | None, Header(alias="X-Admin-Key")] = None,
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    ) -> dict[str, object]:
+        authorize_admin(admin_secret, credentials)
         with closing(connect()) as connection:
             rows = connection.execute("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 50").fetchall()
         return {"items": [{"id": row["id"], "event_type": row["event_type"], "message": row["message"], "created_at": row["created_at"], "metadata": json.loads(row["metadata"] or "{}") } for row in rows]}
 
     @app.get("/api/v1/admin/analytics")
-    def admin_analytics(admin_secret: Annotated[str | None, Header(alias="X-Admin-Key")] = None) -> dict[str, object]:
-        if not admin_secret_key or not secrets.compare_digest(admin_secret or "", admin_secret_key):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credencial municipal no válida.")
+    def admin_analytics(
+        admin_secret: Annotated[str | None, Header(alias="X-Admin-Key")] = None,
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    ) -> dict[str, object]:
+        authorize_admin(admin_secret, credentials)
         report = analytics_service.get_summary()
         report["summary"]["production"] = production
+        with closing(connect()) as connection:
+            eco_purchases = connection.execute(
+                "SELECT COUNT(*) AS total FROM eco_id_tokens WHERE scanned_at IS NOT NULL AND eco_purchase = 1"
+            ).fetchone()["total"]
+            steps_total = connection.execute(
+                "SELECT COALESCE(SUM(steps), 0) AS total FROM daily_step_counts"
+            ).fetchone()["total"]
+        report["conversion_factors"] = CO2_CONVERSION_FACTORS
+        report["points_per_euro"] = ECOPOINTS_PER_EURO
+        report["city_impact"] = {
+            "eco_purchases": eco_purchases,
+            "steps_total": steps_total,
+            "co2_avoided_kg": round(
+                steps_total / CO2_CONVERSION_FACTORS["steps_per_kg"]
+                + eco_purchases * CO2_CONVERSION_FACTORS["eco_purchase_kg"],
+                3,
+            ),
+        }
         return report
 
     @app.get("/api/v1/cashier/validations")

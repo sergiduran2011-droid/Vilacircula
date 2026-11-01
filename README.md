@@ -17,12 +17,18 @@ The frontend is static and does not contain database credentials. Account, coupo
 - A Viladecans merchant map with category filters, optional distance sorting after the resident grants location permission, OpenStreetMap source links, and directions for mapped locations.
 - Server-derived achievement badges and current/longest-day activity streaks based on recorded point events.
 - A school leaderboard with each school's accumulated points and the signed-in resident's rank within their school; it does not publish other residents' names.
+- Automatic account roles: adults use a personal impact dashboard, students under 18 join a school with its registration code, and configured administrator emails unlock the municipal panel.
+- CO₂ estimates use 10,000 steps/kg, 6 g per verified ECO purchase, and 7.5 km of EcoRuta/kg. A cashier-validated EcoID is the currently recorded ECO action.
+- The balance shows the fixed EcoPoint conversion of 30 points per euro.
+- An opt-in browser accelerometer estimates daily steps while VilaCircula is open; reaching 5,000 steps awards 30 EcoPunts once per day.
 - A cashier workspace with daily and weekly activity, a seven-day chart, recent validations, QR scanning, and manual code entry.
 - A resident wallet with active/redeemed coupon history and scannable coupon QR codes. In production, the merchant's authenticated cashier validates the QR; residents cannot mark their own coupons as redeemed.
 - Coupon validation scoped to the cashier's merchant. A successful redemption is recorded once and moves the coupon out of the active wallet.
 - Server-issued EcoID QR codes that expire after 45 seconds and can be used once. An authorized cashier scan awards 10 points to the associated account and confirms the scan in the resident's open EcoID screen through authenticated server events.
 - An administration dashboard for aggregate operational metrics and cashier provisioning.
 - PWA installation from the first sign-in screen and the first-login welcome card, with browser-native installation where available and device-specific instructions otherwise.
+- Catalan is the default interface language; a persistent language selector switches the PWA and legal pages to Spanish.
+- Keyboard skip navigation, visible focus states, accessible merchant-logo names, QR descriptions, and friendly network/scanner errors.
 
 ### Install VilaCircula
 
@@ -50,11 +56,25 @@ The current badge milestones are:
 | Constancy | Record point-earning activity on 3 consecutive days. |
 | Unstoppable | Record point-earning activity on 7 consecutive days. |
 
-The interface displays earned badges and progress toward the remaining milestones. Streaks are based on points already recorded by the API; this feature does not add weekly challenges, step tracking, or a way for residents to award themselves points.
+The interface displays earned badges and progress toward the remaining milestones. Streaks are based on points already recorded by the API; this feature does not add weekly challenges or a way for residents to award themselves points. The separate step counter is an opt-in device-motion estimate.
 
 ### School leaderboard
 
 The leaderboard aggregates contribution points by school and shows the signed-in resident's position among profiles in their own school. It does not expose other residents' names or individual activity. Totals depend on the profiles and point events present in the configured database; development/demo data should not be treated as official school results.
+
+### Automatic roles and environmental impact
+
+Roles are assigned by the API and are not selectable in the interface. New accounts must provide a date of birth. People aged 18 or older receive a general profile and see their personal EcoPoint and CO₂ impact instead of the school league. Under-18 accounts need a valid school code; the code determines the school and grants access to the league. The verified Google email is checked against the server-side administrator allowlist; only those accounts see the municipal panel and may call its endpoints. Existing accounts keep their school-based student access when upgraded.
+
+Configure `VILACIRCULA_ADMIN_EMAILS` as a comma-separated list of administrator emails and `VILACIRCULA_SCHOOL_CODES` as a JSON object mapping school names to their exclusive codes. Keep both values on the API server. The configured school names must match `Goar`, `Torre-roja`, `Josep Mestres`, `Miramar`, `Olímpia`, or `Sales`.
+
+The CO₂ estimate is `steps / 10,000 + verified ECO purchases × 0.006 + EcoRuta kilometres / 7.5` kilograms. The steps term uses the opt-in browser sensor estimate; only EcoID scans validated by a cashier count as verified ECO purchases. EcoRuta distance is not yet connected and contributes zero until that source is integrated. The municipal panel reports the same conversion factors and the CO₂ total supported by recorded actions.
+
+EcoPoints use a fixed display conversion of `30 EcoPoints = 1 €`; the euro estimate beside the balance is calculated from the current point balance using that rate.
+
+### Daily step counter
+
+The home dashboard can request access to the device-motion sensor and estimate steps while the PWA is open in a supported browser over HTTPS. The estimate is synchronized to the API by local calendar day in `Europe/Madrid`; the API rejects backward or implausibly fast increases and awards 30 EcoPunts once after 5,000 steps. Only the estimated daily total is sent to and stored by the API; raw motion samples remain on the device. Browser motion access is not a health-platform reading and does not continue while the browser suspends the app, so the count may differ from a phone's health app and is not guaranteed to include background steps. Sensor access is optional and requires the user's permission.
 
 ### Coupon wallet and QR validation
 
@@ -84,7 +104,9 @@ For local development, create a `.env` file or export environment variables in y
 | `VILACIRCULA_ENV` | Set to `development` locally or `production` on the hosted API. |
 | `VILACIRCULA_DATABASE_URL` | Optional database URL. Use a PostgreSQL URL for Supabase; otherwise the local SQLite database is used. `DATABASE_URL` is also accepted. |
 | `VILACIRCULA_ALLOWED_ORIGINS` | Comma-separated browser origins permitted by CORS. The deployed site origin is `https://sergiduran2011-droid.github.io` (do not include the `/Vilacircula/` path). |
-| `VILACIRCULA_ADMIN_KEY` | Secret required for municipal admin endpoints. Keep it on the server. |
+| `VILACIRCULA_ADMIN_KEY` | Server-side fallback credential for municipal operations. Keep it on the server; normal admin access uses a configured Google email. |
+| `VILACIRCULA_ADMIN_EMAILS` | Comma-separated allowlist of verified Google emails assigned the admin role. |
+| `VILACIRCULA_SCHOOL_CODES` | JSON object mapping school names to exclusive student registration codes. Store only on the API server. |
 | `VILACIRCULA_INITIAL_CASHIER_PASSWORD` | Initial password for seeded cashier accounts. Set a strong temporary value and change it after first login. |
 | `VILACIRCULA_ALLOW_SELF_REDEEM` | Enables resident self-redemption. Keep this `0` in production so merchants validate coupons. |
 | `VILACIRCULA_MERCHANT_KEY` | Optional merchant integration secret. |
@@ -95,7 +117,7 @@ For local development, create a `.env` file or export environment variables in y
 
 Create a **Web application** OAuth client in Google Cloud Console and add the frontend origins under **Authorized JavaScript origins** (for the hosted app: `https://sergiduran2011-droid.github.io`; locally: `http://localhost:8001`). Set its client ID as `VILACIRCULA_GOOGLE_CLIENT_ID` in the API environment (Render) and in local development. No Google client secret is used by the frontend.
 
-Residents with an existing VilaCircula account can sign in with Google once and verify their current username and password to link it. Existing sessions also offer a way to link the current profile. Google ID tokens are verified by the API before a session is issued. The API adds the nullable Google identity field to existing databases without removing profiles or their balances.
+Residents with an existing VilaCircula account can sign in with Google once and verify their current username and password to link it. New registrations also ask for a date of birth; under-18 users need their school's configured code. Existing sessions also offer a way to link the current profile. Google ID tokens are verified by the API before a session is issued. Schema upgrades preserve existing profiles and balances.
 
 For a local PostgreSQL database, for example:
 

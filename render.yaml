@@ -17,5 +17,11 @@ services:
         sync: false
       - key: VILACIRCULA_ADMIN_KEY
         generateValue: true
+      - key: VILACIRCULA_ADMIN_EMAILS
+        sync: false
+      - key: VILACIRCULA_GOOGLE_CLIENT_ID
+        sync: false
+      - key: VILACIRCULA_SCHOOL_CODES
+        sync: false
       - key: VILACIRCULA_ALLOW_SELF_REDEEM
         value: "0"

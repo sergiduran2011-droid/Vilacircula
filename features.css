@@ -21,5 +21,32 @@
 .map-directions:hover{background:#285542}
 .coupon-modal .scanner-status{line-height:1.55}
 .coupon-modal:has(#coupon-large-qr) .coupon-large-qr{margin:18px auto 10px}
+#screen-league[hidden],[data-screen="league"][hidden],.mini-league[hidden],.school-card[hidden]{display:none!important}
+body[data-role="user"] .bottom-nav{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+.personal-impact,.conversion-factors-card{margin-top:16px;padding:18px;border:1px solid #e5ebdc;border-radius:14px;background:#fff}
+.impact-heading{display:flex;justify-content:space-between;align-items:center;gap:14px}
+.impact-heading h2{margin:4px 0 0;font-size:16px}
+.impact-co2{display:grid;justify-items:end;color:#193e30}
+.impact-co2 strong{font-size:23px;letter-spacing:-.7px}
+.impact-co2 small{color:#788179;font-size:9px}
+.impact-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:15px}
+.impact-metrics>div{display:grid;gap:4px;padding:11px;border-radius:9px;background:#f5f7f1}
+.impact-metrics strong{font-size:14px}
+.impact-metrics small{color:#788179;font-size:9px}
+.personal-impact>p{margin:12px 0 0;color:#788179;font-size:9px;line-height:1.5}
+.conversion-factors-card{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;background:#f7f9f2}
+.conversion-factors-card>.eyebrow{grid-column:1/-1}
+.conversion-factors-card>div{display:grid;gap:4px;padding:11px;border-radius:9px;background:#fff}
+.conversion-factors-card>div strong{font-size:11px}
+.conversion-factors-card>div span{color:#788179;font-size:9px}
+.admin-dashboard .conversion-factors{display:grid;gap:8px;margin:12px 0;padding:13px;border-radius:9px;background:#f7f9f2;color:#566241;font-size:10px}
+.admin-dashboard .conversion-factors strong{color:#19281f;font-size:11px}
+body[data-role="user"] .rank-pill{display:none}
+.step-habit{display:flex;flex-direction:column;align-items:stretch}
+.step-habit .steps{margin-top:3px}
+.step-habit>p{min-height:28px}
+.step-counter-button{align-self:flex-start;border:1px solid #dfe7d2;border-radius:8px;background:#f7faef;padding:8px 10px;color:#36533a;font-size:9px;font-weight:800}
+.step-counter-button:hover{background:#edf4df}
+.step-counter-button:disabled{cursor:wait;opacity:.65}
 @media(max-width:900px){.badge-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:560px){.engagement-panel{padding:14px}.badge-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.engagement-heading h2{font-size:14px}}
+@media(max-width:560px){.engagement-panel,.personal-impact,.conversion-factors-card{padding:14px}.badge-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.engagement-heading h2{font-size:14px}.impact-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.conversion-factors-card{grid-template-columns:1fr}.conversion-factors-card>.eyebrow{grid-column:auto}}

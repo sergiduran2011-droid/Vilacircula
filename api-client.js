@@ -1,6 +1,6 @@
 (() => {
   const TOKEN_KEY = 'vilacircula-api-token';
-  const API_CONFIG = fetch('./api-config.json')
+  const API_CONFIG = fetch('./api-config.json?v=2')
     .then(response => response.ok ? response.json() : {})
     .catch(() => ({}));
 
@@ -15,10 +15,47 @@
   status.setAttribute('aria-live', 'polite');
   status.textContent = 'Modo de demostración';
   document.querySelector('.topbar').after(status);
+  const legalFooter = document.createElement('footer');
+  legalFooter.className = 'legal-footer';
+  legalFooter.innerHTML = '<div><strong>VilaCircula</strong><span>Projecte Talent a les Aules</span></div><nav aria-label="Informació legal"><a href="./legal.html#privacidad">Política de Privacitat i RGPD</a><a href="./legal.html#terminos">Termes d’ús i prevenció del frau</a><a href="./legal.html#galetes">Política de Galetes</a><button type="button" id="merchant-registration-open">Alta de comerços</button></nav>';
+  document.body.append(legalFooter);
+  document.querySelector('#merchant-registration-open').addEventListener('click', openMerchantRegistration);
+
+  function openMerchantRegistration() {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-backdrop';
+    overlay.innerHTML = '<section class="modal profile-modal merchant-registration" role="dialog" aria-modal="true" aria-labelledby="merchant-registration-title"><button class="icon-button modal-close" type="button" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">DIRECTORIO DE VILADECANS</span><h2 id="merchant-registration-title">Da de alta tu comercio.</h2><p>Prepara una solicitud para revisar la incorporación del establecimiento al directorio público.</p><form id="merchant-registration-form"><label for="merchant-public-name">Nombre del establecimiento</label><input id="merchant-public-name" name="name" maxlength="100" required><label for="merchant-public-logo">URL del logotipo</label><input id="merchant-public-logo" name="logo" type="url" maxlength="500" placeholder="https://…" required><label for="merchant-public-location">Ubicación que se mostrará</label><input id="merchant-public-location" name="location" maxlength="200" required><label for="merchant-contact-email">Correo de contacto</label><input id="merchant-contact-email" name="email" type="email" autocomplete="email" required><label class="legal-consent"><input name="display_consent" type="checkbox" required><span>Autorizo a VilaCircula a mostrar el nombre, logotipo y ubicación del establecimiento en el directorio público.</span></label><p class="profile-privacy">La solicitud se revisará antes de publicar el establecimiento. <a href="./legal.html#privacidad" target="_blank" rel="noopener">Política de Privacitat</a></p><button class="primary profile-submit" type="submit">Preparar solicitud</button><p class="profile-error" id="merchant-registration-status" role="status" aria-live="polite"></p></form></section>';
+    const modal = overlay.querySelector('.merchant-registration');
+    const close = () => overlay.remove();
+    overlay.querySelector('.modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+    overlay.querySelector('#merchant-registration-form').addEventListener('submit', event => {
+      event.preventDefault();
+      const data = new FormData(event.currentTarget);
+      const subject = `Solicitud de alta de comercio: ${String(data.get('name')).trim()}`;
+      const body = [
+        `Establecimiento: ${String(data.get('name')).trim()}`,
+        `Logotipo: ${String(data.get('logo')).trim()}`,
+        `Ubicación pública: ${String(data.get('location')).trim()}`,
+        `Correo de contacto: ${String(data.get('email')).trim()}`,
+        'Consentimiento: autorizo mostrar el nombre, logotipo y ubicación en el directorio público.'
+      ].join('\n');
+      overlay.querySelector('#merchant-registration-status').textContent =
+        'Se abrirá tu aplicación de correo. Envía el mensaje para completar la solicitud; la publicación requiere revisión.';
+      window.location.href = `mailto:sergiduran2011@gmail.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    });
+    document.querySelector('#modal-root').append(overlay);
+    window.lucide?.createIcons();
+    modal.querySelector('input').focus();
+  }
   const style = document.createElement('link');
   style.rel = 'stylesheet';
-  style.href = './api-client.css?v=25';
+  style.href = './api-client.css?v=30';
   document.head.append(style);
+  const legalStyle = document.createElement('link');
+  legalStyle.rel = 'stylesheet';
+  legalStyle.href = './legal.css?v=1';
+  document.head.append(legalStyle);
   const cashierStyle = document.createElement('link');
   cashierStyle.rel = 'stylesheet';
   cashierStyle.href = './cashier.css';
@@ -30,6 +67,25 @@
 
   let token = localStorage.getItem(TOKEN_KEY);
   let profile = null;
+  let stepActivityDate = null;
+  let stepCount = 0;
+  let stepGoal = 5000;
+  let stepRewarded = false;
+  let stepSensorActive = false;
+  let stepSyncBusy = false;
+  let stepSyncTimer = null;
+  let stepMotionBaseline = null;
+  let stepMotionArmed = true;
+  let lastDetectedStepAt = 0;
+  const updateBalance = window.update;
+  const ECOPOINTS_PER_EURO = 30;
+  window.update = function () {
+    updateBalance();
+    const balance = Number(document.querySelector('#balance').textContent);
+    document.querySelector('#euros').textContent = (balance / ECOPOINTS_PER_EURO).toFixed(2).replace('.', ',');
+  };
+  window.update();
+  let googleRegistrationConfig = { schools: [], student_registration_enabled: false };
   let liveApi = false;
   let rewards = [];
   let merchantCatalog = [];
@@ -177,13 +233,22 @@
 
   function getApiErrorMessage(error) {
     const message = typeof error?.message === 'string' ? error.message : String(error || '');
+    if (/(qr|código|cupón).*(expir|caduc)|(expir|caduc).*(qr|código|cupón)/i.test(message)) {
+      return 'El código QR ha caducado. Genera uno nuevo y vuelve a escanearlo.';
+    }
+    if (/Failed to fetch|NetworkError|fetch failed|Load failed|network request/i.test(message)) {
+      return 'No hay conexión con VilaCircula. Comprueba tu conexión e inténtalo de nuevo.';
+    }
     if (/401|Unauthorized/.test(message)) return 'La sesión no es válida o ha caducado. Vuelve a iniciar sesión.';
     if (/403|Forbidden/.test(message)) return 'No tienes permiso para hacer esta acción.';
     if (/404|Not Found/.test(message)) return 'No se ha encontrado la información solicitada.';
     if (/409|Conflict/.test(message)) return 'Ya existe ese registro o la operación ya se había realizado.';
     if (/422|Unprocessable/.test(message)) return 'Revisa los datos del formulario y vuelve a intentarlo.';
     if (/429|Too Many/.test(message)) return 'Demasiados intentos. Espera unos minutos antes de volver a probar.';
-    return message || 'Ha ocurrido un error. Inténtalo de nuevo.';
+    if (/^[\w.]+Error:|Traceback|Exception|SQL|database|stack|undefined|null/i.test(message)) {
+      return 'No se pudo completar la solicitud. Comprueba los datos e inténtalo de nuevo.';
+    }
+    return 'No se pudo completar la solicitud. Comprueba los datos e inténtalo de nuevo.';
   }
 
   async function request(path, options = {}) {
@@ -194,7 +259,15 @@
     const headers = new Headers(options.headers || {});
     if (bearerToken) headers.set('Authorization', `Bearer ${bearerToken}`);
     if (options.body) headers.set('Content-Type', 'application/json');
-    const response = await fetch(await apiUrl(path), { ...options, headers });
+    let response;
+    try {
+      response = await fetch(await apiUrl(path), { ...options, headers });
+    } catch (error) {
+      if (error instanceof TypeError || !navigator.onLine) {
+        throw new Error('No hay conexión con VilaCircula. Comprueba tu conexión e inténtalo de nuevo.', { cause: error });
+      }
+      throw error;
+    }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.detail || `Error del servidor (${response.status}).`);
     return payload;
@@ -249,11 +322,14 @@
 
   function renderAdminMetrics(report) {
     const summary = report.summary || {};
+    const factors = report.conversion_factors || {};
+    const cityImpact = report.city_impact || {};
     const metrics = [
       { label: 'Perfiles', value: summary.total_profiles || 0, detail: 'activos esta semana' },
       { label: 'Validaciones', value: summary.total_validations || 0, detail: 'total registradas' },
       { label: 'Éxitos', value: summary.successful_validations || 0, detail: 'cupones validados' },
       { label: 'Caja', value: summary.total_cashiers || 0, detail: 'usuarios de comercio' },
+      { label: 'CO₂ evitado', value: `${Number(cityImpact.co2_avoided_kg || 0).toLocaleString(window.vilaLocale?.() || 'ca-ES')} kg`, detail: `${cityImpact.eco_purchases || 0} compras ECO verificadas` },
     ];
     return `
       <div class="admin-dashboard">
@@ -266,13 +342,19 @@
             </div>
           `).join('')}
         </div>
+        <section class="conversion-factors">
+          <strong>Factores de conversión</strong>
+          <span>${Number(factors.steps_per_kg || 10000).toLocaleString(window.vilaLocale?.() || 'ca-ES')} pasos = 1 kg CO₂</span>
+          <span>Compra ECO = ${Number(factors.eco_purchase_kg || 0.006) * 1000} g CO₂</span>
+          <span>EcoRuta: ${Number(factors.eco_route_km_per_kg || 7.5).toLocaleString(window.vilaLocale?.() || 'ca-ES')} km = 1 kg CO₂</span>
+        </section>
         <div class="admin-chart">
           <div class="reward-summary-head"><strong>Actividad reciente</strong><span class="eyebrow">${summary.production ? 'PROD' : 'DEMO'}</span></div>
           ${(report.recent_validations || []).slice(0, 5).map(item => `
             <div class="admin-row">
               <strong>${item.code}</strong>
               <small>${item.status}</small>
-              <span>${new Date(item.validated_at).toLocaleDateString('es-ES')}</span>
+              <span>${new Date(item.validated_at).toLocaleDateString(window.vilaLocale?.() || 'ca-ES')}</span>
             </div>
           `).join('') || '<div class="admin-row"><strong>No hay validaciones todavía</strong><small>sin datos</small><span>—</span></div>'}
         </div>
@@ -291,43 +373,21 @@
         <h2 id="admin-title">Dashboard de administración</h2>
         <p>Resumen operativo del impacto y la actividad de VilaCircula.</p>
         <div class="profile-modal">
-          <label for="admin-key">Clave administrativa</label>
-          <input id="admin-key" type="password" name="admin_key" autocomplete="off" placeholder="Introduce la clave municipal" />
-          <div class="admin-actions">
-            <button type="button" class="primary" id="admin-load">Cargar dashboard</button>
-            <button type="button" class="profile-local" id="admin-close-action">Volver</button>
-          </div>
-          <div id="admin-results"></div>
+          <div class="admin-actions"><button type="button" class="profile-local" id="admin-close-action">Volver</button></div>
+          <div id="admin-results"><p class="profile-error">Cargando dashboard…</p></div>
         </div>
       </section>
     `;
     document.querySelector('#modal-root').append(overlay);
     window.lucide?.createIcons();
     const resultNode = overlay.querySelector('#admin-results');
-    const load = async () => {
-      const key = overlay.querySelector('#admin-key').value.trim();
-      if (!key) {
-        resultNode.innerHTML = '<p class="profile-error">Introduce la clave municipal.</p>';
-        return;
-      }
-      resultNode.innerHTML = '<p class="profile-error">Cargando dashboard…</p>';
-      try {
-        const response = await fetch(await apiUrl('/admin/analytics'), {
-          headers: { 'X-Admin-Key': key }
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.detail || 'No se pudo cargar el dashboard.');
-        resultNode.innerHTML = renderAdminMetrics(payload);
-      } catch (error) {
-        resultNode.innerHTML = `<p class="profile-error">${getApiErrorMessage(error)}</p>`;
-      }
-    };
-    overlay.querySelector('#admin-load').addEventListener('click', load);
+    try {
+      resultNode.innerHTML = renderAdminMetrics(await request('/admin/analytics'));
+    } catch (error) {
+      resultNode.innerHTML = `<p class="profile-error">${getApiErrorMessage(error)}</p>`;
+    }
     overlay.querySelector('#admin-close').addEventListener('click', closeProfileDialog);
     overlay.querySelector('#admin-close-action').addEventListener('click', closeProfileDialog);
-    overlay.querySelector('#admin-key').addEventListener('keydown', event => {
-      if (event.key === 'Enter') load();
-    });
   }
 
   function setConnectionState(online) {
@@ -363,7 +423,7 @@
 
   function updateProfileUi(value) {
     profile = value;
-    window.applyCitizenProfile(value.display_name, value.school);
+    window.applyCitizenProfile(value.display_name, value.school, value.role);
   }
 
   function decorateMerchants(entries) {
@@ -383,6 +443,7 @@
     merchantCatalog = merchantData.items;
     rewards = rewardData.items;
     window.setCitizenDashboard(dashboard);
+    await loadTodaySteps();
     window.setCitizenMerchants(decorateMerchants(merchantData.items));
     window.setCitizenWallet(rewards, wallet.active, wallet.redeemed);
     const rewardSummary = buildRewardSummary();
@@ -454,8 +515,35 @@
       }
     });
     choices.querySelector('#google-create-profile').addEventListener('click', () => {
-      choices.innerHTML = `<form id="google-create-form"><label for="google-display-name">Nombre o apodo</label><input id="google-display-name" name="display_name" maxlength="32" autocomplete="nickname" required><label for="google-school">Tu instituto</label><select id="google-school" name="school" required><option value="">Selecciona tu instituto</option><option>Goar</option><option>Torre-roja</option><option>Josep Mestres</option><option>Miramar</option><option>Olímpia</option><option>Sales</option></select><button class="primary profile-submit" type="submit">Crear cuenta con Google</button></form><button class="profile-local" id="google-link-existing">Vincular un perfil que ya tengo</button><p class="profile-error" id="google-link-error" role="alert"></p>`;
+      const schoolOptions = googleRegistrationConfig.schools
+        .map(school => `<option value="${escapeHtml(school)}">${escapeHtml(school)}</option>`)
+        .join('');
+      choices.innerHTML = `<form id="google-create-form"><label for="google-display-name">Nombre o apodo</label><input id="google-display-name" name="display_name" maxlength="32" autocomplete="nickname" required><label for="google-birth-date">Fecha de nacimiento</label><input id="google-birth-date" name="birth_date" type="date" max="${new Date().toISOString().slice(0, 10)}" required><div id="google-student-fields" hidden><label for="google-school">Tu instituto</label><select id="google-school" name="school"><option value="">Selecciona tu instituto</option>${schoolOptions}</select><label for="google-school-code">Código exclusivo del centro</label><input id="google-school-code" name="school_code" autocomplete="off" maxlength="64"><small>Solicita el código a tu centro educativo.</small><label class="legal-consent"><input id="student-legal-consent" name="legal_consent" type="checkbox" required disabled><span>Soy mayor de 14 años o tengo el consentimiento de mis tutores/centro educativo para utilizar VilaCircula y acepto la <a href="./legal.html#privacidad" target="_blank" rel="noopener">Política de Privacidad</a>.</span></label></div><button class="primary profile-submit" type="submit">Crear cuenta con Google</button></form><button class="profile-local" id="google-link-existing">Vincular un perfil que ya tengo</button><p class="profile-error" id="google-link-error" role="alert"></p>`;
       choices.querySelector('#google-display-name').value = claims.display_name || '';
+      const birthDate = choices.querySelector('#google-birth-date');
+      const studentFields = choices.querySelector('#google-student-fields');
+      const school = choices.querySelector('#google-school');
+      const schoolCode = choices.querySelector('#google-school-code');
+      const legalConsent = choices.querySelector('#student-legal-consent');
+      const updateRegistrationFields = () => {
+        const selectedDate = birthDate.value ? new Date(`${birthDate.value}T00:00:00`) : null;
+        const today = new Date();
+        const age = selectedDate
+          ? today.getFullYear() - selectedDate.getFullYear() - (
+            today.getMonth() < selectedDate.getMonth()
+            || (today.getMonth() === selectedDate.getMonth() && today.getDate() < selectedDate.getDate()) ? 1 : 0
+          )
+          : null;
+        const isStudent = age !== null && age < 18;
+        studentFields.hidden = !isStudent;
+        school.required = isStudent;
+        schoolCode.required = isStudent;
+        legalConsent.required = isStudent;
+        legalConsent.disabled = !isStudent;
+        school.disabled = isStudent && !googleRegistrationConfig.student_registration_enabled;
+        schoolCode.disabled = isStudent && !googleRegistrationConfig.student_registration_enabled;
+      };
+      birthDate.addEventListener('change', updateRegistrationFields);
       choices.querySelector('#google-create-form').addEventListener('submit', async event => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
@@ -464,12 +552,24 @@
         setButtonLoading(submit, 'Creando cuenta…');
         error.textContent = '';
         try {
+          const dateOfBirth = String(form.get('birth_date'));
+          const selectedDate = new Date(`${dateOfBirth}T00:00:00`);
+          const today = new Date();
+          const age = today.getFullYear() - selectedDate.getFullYear() - (
+            today.getMonth() < selectedDate.getMonth()
+            || (today.getMonth() === selectedDate.getMonth() && today.getDate() < selectedDate.getDate()) ? 1 : 0
+          );
+          if (age < 18 && !googleRegistrationConfig.student_registration_enabled) {
+            throw new Error('El registro de estudiantes todavía no está habilitado por su centro educativo.');
+          }
           const result = await request('/auth/google', {
             method: 'POST',
             body: JSON.stringify({
               credential: pendingGoogleCredential,
               display_name: String(form.get('display_name')).trim(),
-              school: String(form.get('school'))
+              birth_date: dateOfBirth,
+              legal_consent: form.get('legal_consent') === 'on',
+              ...(age < 18 ? { school: String(form.get('school')), school_code: String(form.get('school_code')).trim() } : {})
             })
           });
           await completeGoogleLogin(result);
@@ -486,6 +586,7 @@
     const error = overlay.querySelector('#google-auth-error');
     try {
       const config = await request('/auth/google/config');
+      googleRegistrationConfig = config;
       if (!config.client_id) {
         error.textContent = 'El acceso con Google todavía no está configurado en el servidor.';
         return;
@@ -547,7 +648,11 @@
     const overlay = document.createElement('div');
     overlay.id = 'profile-dialog';
     overlay.className = 'modal-backdrop';
-    overlay.innerHTML = `<section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title"><button class="icon-button modal-close" id="profile-close" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">PERFIL VILACIRCULA</span><h2 id="profile-title">Tu cuenta</h2><p>${profile?.display_name || ''} · ${profile?.username || 'Modo local'}</p><div class="profile-actions"><button class="profile-action" id="edit-citizen-profile"><i data-lucide="user-round-cog"></i>Editar nombre e instituto</button><button class="profile-action" id="edit-citizen-credentials"><i data-lucide="key-round"></i>Usuario y contraseña</button><button class="profile-action" id="open-cashier"><i data-lucide="store"></i>Zona de caja de comercio</button><button class="profile-action" id="open-admin-dashboard"><i data-lucide="shield-check"></i>Panel municipal</button><button class="profile-action danger" id="citizen-logout"><i data-lucide="log-out"></i>Cerrar sesión</button></div><p class="profile-error" id="profile-error" role="alert"></p></section>`;
+    const adminAction = profile?.role === 'admin'
+      ? '<button class="profile-action" id="open-admin-dashboard"><i data-lucide="shield-check"></i>Panel municipal</button>'
+      : '';
+    const profileAction = 'Editar nombre';
+    overlay.innerHTML = `<section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title"><button class="icon-button modal-close" id="profile-close" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">PERFIL VILACIRCULA</span><h2 id="profile-title">Tu cuenta</h2><p>${profile?.display_name || ''} · ${profile?.username || 'Modo local'}</p><div class="profile-actions"><button class="profile-action" id="edit-citizen-profile"><i data-lucide="user-round-cog"></i>${profileAction}</button><button class="profile-action" id="edit-citizen-credentials"><i data-lucide="key-round"></i>Usuario y contraseña</button><button class="profile-action" id="open-cashier"><i data-lucide="store"></i>Zona de caja de comercio</button>${adminAction}<button class="profile-action danger" id="citizen-logout"><i data-lucide="log-out"></i>Cerrar sesión</button></div><p class="profile-error" id="profile-error" role="alert"></p></section>`;
     document.querySelector('#modal-root').append(overlay);
     window.lucide?.createIcons();
     overlay.querySelector('#profile-close').addEventListener('click', closeProfileDialog);
@@ -555,7 +660,7 @@
     overlay.querySelector('#edit-citizen-profile').addEventListener('click', () => openEditCitizenProfile());
     overlay.querySelector('#edit-citizen-credentials').addEventListener('click', () => openCitizenCredentials());
     overlay.querySelector('#open-cashier').addEventListener('click', openCashierLogin);
-    overlay.querySelector('#open-admin-dashboard').addEventListener('click', openAdminDashboard);
+    overlay.querySelector('#open-admin-dashboard')?.addEventListener('click', openAdminDashboard);
     overlay.querySelector('#citizen-logout').addEventListener('click', logoutCitizen);
   }
 
@@ -564,10 +669,9 @@
     const overlay = document.createElement('div');
     overlay.id = 'profile-dialog';
     overlay.className = 'modal-backdrop';
-    overlay.innerHTML = `<section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title"><button class="icon-button modal-close" id="profile-close" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">PERFIL CIUDADANO</span><h2 id="profile-title">Editar perfil</h2><form id="profile-form"><label for="citizen-name">Nombre o apodo</label><input id="citizen-name" name="display_name" maxlength="32" required><label for="citizen-school">Tu instituto</label><select id="citizen-school" name="school" required><option>Goar</option><option>Torre-roja</option><option>Josep Mestres</option><option>Miramar</option><option>Olímpia</option><option>Sales</option></select><button class="primary profile-submit" type="submit">Guardar cambios</button><p class="profile-error" id="profile-error" role="alert"></p></form></section>`;
+    overlay.innerHTML = `<section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title"><button class="icon-button modal-close" id="profile-close" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">PERFIL CIUDADANO</span><h2 id="profile-title">Editar perfil</h2><form id="profile-form"><label for="citizen-name">Nombre o apodo</label><input id="citizen-name" name="display_name" maxlength="32" required><button class="primary profile-submit" type="submit">Guardar cambios</button><p class="profile-error" id="profile-error" role="alert"></p></form></section>`;
     document.querySelector('#modal-root').append(overlay);
     overlay.querySelector('#citizen-name').value = profile?.display_name || '';
-    overlay.querySelector('#citizen-school').value = profile?.school || 'Goar';
     overlay.querySelector('#profile-close').addEventListener('click', openProfileDialog);
     overlay.querySelector('#profile-form').addEventListener('submit', async event => {
       event.preventDefault();
@@ -575,11 +679,11 @@
       const submit = overlay.querySelector('.profile-submit');
       submit.disabled = true;
       try {
-        const saved = await request('/profile', { method: 'PUT', body: JSON.stringify({ display_name: String(data.get('display_name')).trim(), school: String(data.get('school')) }) });
+        const saved = await request('/profile', { method: 'PUT', body: JSON.stringify({ display_name: String(data.get('display_name')).trim() }) });
         updateProfileUi({ ...profile, ...saved });
         closeProfileDialog();
       } catch (error) {
-        overlay.querySelector('#profile-error').textContent = error.message;
+        overlay.querySelector('#profile-error').textContent = getApiErrorMessage(error);
         submit.disabled = false;
       }
     });
@@ -611,13 +715,20 @@
         closeProfileDialog();
         setStatus('Credenciales actualizadas; las otras sesiones se han cerrado.', 'connected');
       } catch (error) {
-        overlay.querySelector('#profile-error').textContent = error.message;
+        overlay.querySelector('#profile-error').textContent = getApiErrorMessage(error);
         submit.disabled = false;
       }
     });
   }
 
   async function logoutCitizen() {
+    if (stepSensorActive) {
+      window.removeEventListener('devicemotion', handleDeviceMotion);
+      clearInterval(stepSyncTimer);
+      stepSyncTimer = null;
+      await syncStepCount();
+      stepSensorActive = false;
+    }
     try {
       await request('/auth/logout', { method: 'POST' });
     } catch {
@@ -747,7 +858,8 @@
           }
           if (rawValue) {
             if (/^VCID-[A-F0-9]{32}$/i.test(rawValue.trim())) {
-              const result = await requestWithToken('/cashier/eco-id/scan', { method: 'POST', body: JSON.stringify({ code: rawValue.trim().toUpperCase() }) }, cashierToken);
+              const ecoPurchase = root.querySelector('#cashier-eco-purchase')?.checked === true;
+              const result = await requestWithToken('/cashier/eco-id/scan', { method: 'POST', body: JSON.stringify({ code: rawValue.trim().toUpperCase(), eco_purchase: ecoPurchase }) }, cashierToken);
               await showCashierSuccess(root, { title: `+${result.points} EcoPuntos`, description: `${escapeHtml(result.display_name)} · ${escapeHtml(result.merchant)}`, kind: 'ecoid' }, cashierToken);
               return;
             }
@@ -767,7 +879,9 @@
       };
       scan();
     } catch (error) {
-      statusNode.textContent = error.name === 'NotAllowedError' ? 'Permite el acceso a la cámara para escanear.' : error.message;
+      statusNode.textContent = error.name === 'NotAllowedError'
+        ? 'Permite el acceso a la cámara para escanear.'
+        : getApiErrorMessage(error);
     }
   }
 
@@ -814,7 +928,7 @@
       ...(dashboard.recent_coupons || []).map(item => ({ ...item, kind: 'coupon', title: item.status === 'success' ? 'Cupón canjeado' : 'Intento de canje', detail: item.code })),
       ...(dashboard.recent_ecoids || []).map(item => ({ ...item, kind: 'ecoid', title: 'EcoID validado', detail: '+10 EcoPuntos' }))
     ].sort((first, second) => second.validated_at || second.created_at ? Date.parse(second.validated_at || second.created_at) - Date.parse(first.validated_at || first.created_at) : 0).slice(0, 8);
-    root.innerHTML = `<header class="cashier-topbar"><a class="cashier-brand"><span class="cashier-brand-mark"><i data-lucide="leaf"></i></span><span><b>VilaCircula</b><small>Terminal de comercio</small></span></a><div class="cashier-top-actions"><span class="cashier-merchant"><i data-lucide="store"></i>${dashboard.merchant || 'Comercio'}</span><button class="icon-button" id="cashier-change-password" aria-label="Cambiar contraseña" title="Cambiar contraseña"><i data-lucide="key-round"></i></button><button class="icon-button" id="cashier-exit" aria-label="Salir de caja" title="Salir de caja"><i data-lucide="log-out"></i></button></div></header><main class="cashier-main"><section class="cashier-welcome"><div><span class="eyebrow">PANEL DE CAJA</span><h1>Hola, ${cashierName || 'equipo'}.</h1><p>Actividad y herramientas de ${dashboard.merchant || 'tu comercio'}.</p></div><span class="cashier-live"><i></i> CONECTADO</span></section>${dashboard.is_demo ? '<p class="cashier-demo-note">Entorno de demostración</p>' : ''}<section class="cashier-metrics" aria-label="Resumen de hoy"><article class="cashier-metric"><span><i data-lucide="ticket-check"></i>Cupones canjeados</span><strong>${today.successful_coupons || 0}</strong><small>hoy · ${week.successful_coupons || 0} esta semana</small></article><article class="cashier-metric cashier-metric-points"><span><i data-lucide="scan-line"></i>EcoID validados</span><strong>${today.ecoid_scans || 0}</strong><small>hoy · ${week.ecoid_scans || 0} esta semana</small></article><article class="cashier-metric"><span><i data-lucide="activity"></i>Actividad total</span><strong>${(today.successful_coupons || 0) + (today.ecoid_scans || 0)}</strong><small>operaciones completadas hoy</small></article><article class="cashier-metric cashier-metric-alert"><span><i data-lucide="triangle-alert"></i>Incidencias</span><strong>${today.failed_coupons || 0}</strong><small>cupones rechazados hoy</small></article></section><section class="cashier-columns"><div class="cashier-main-column"><section class="cashier-scanner-panel"><div class="cashier-section-heading"><div><span class="eyebrow">VALIDACIÓN SEGURA</span><h2>Escanear cliente</h2><p>Lee un cupón para canjearlo o un EcoID para sumar puntos.</p></div><span class="cashier-scan-icon"><i data-lucide="scan-qr-code"></i></span></div><div class="cashier-scanner-preview" id="cashier-preview" hidden><video id="cashier-video" playsinline muted></video><span class="cashier-scan-frame"></span></div><div class="cashier-feedback ${feedback ? 'is-success' : ''}" id="cashier-feedback" role="status" aria-live="polite">${feedback ? `<i data-lucide="circle-check"></i><span><b>${feedback.title}</b><small>${feedback.description}</small></span>` : '<i data-lucide="scan-line"></i><span><b>Listo para escanear</b><small>El QR se valida con el servidor y solo puede usarse una vez.</small></span>'}</div><p class="cashier-scan-status" id="cashier-status">Cámara apagada. Pulsa para iniciar.</p><div class="cashier-scan-actions"><button class="primary" id="cashier-start-scan"><i data-lucide="camera"></i>Escanear QR</button><button class="cashier-secondary" id="cashier-next-scan" ${feedback ? '' : 'hidden'}><i data-lucide="scan-line"></i>Escanear siguiente</button></div><div class="cashier-manual-entry"><label for="manual-coupon-code">Código manual</label><div class="row"><input id="manual-coupon-code" type="text" autocomplete="off" placeholder="VC-... o VCID-..." maxlength="40" /><button class="primary" type="button" id="manual-coupon-submit">Validar</button></div></div></section><section class="cashier-activity-panel"><div class="cashier-section-heading"><div><span class="eyebrow">REGISTRO DEL COMERCIO</span><h2>Actividad reciente</h2></div><button class="cashier-refresh" id="cashier-refresh" aria-label="Actualizar actividad" title="Actualizar"><i data-lucide="refresh-cw"></i></button></div>${activities.length ? `<div class="cashier-activity-list">${activities.map(item => `<article class="cashier-activity-row"><span class="cashier-activity-icon ${item.kind}"><i data-lucide="${item.kind === 'ecoid' ? 'scan-line' : item.status === 'success' ? 'ticket-check' : 'circle-alert'}"></i></span><span><b>${item.title}</b><small>${item.detail}</small></span><time>${new Date(item.validated_at || item.created_at).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</time></article>`).join('')}</div>` : '<p class="cashier-empty">Aún no hay operaciones registradas.</p>'}</section></div><aside class="cashier-side-column"><section class="cashier-chart-panel"><div class="cashier-section-heading"><div><span class="eyebrow">ÚLTIMOS 7 DÍAS</span><h2>Ritmo del comercio</h2></div></div><div class="cashier-chart-legend"><span><i class="coupon-key"></i>Cupones</span><span><i class="ecoid-key"></i>EcoID</span></div><div class="cashier-chart" role="img" aria-label="Operaciones diarias por tipo">${cashierChart(dashboard.activity_by_day || [])}</div><div class="cashier-chart-caption">Cada barra representa operaciones validadas en el día.</div></section><section class="cashier-tip"><span class="cashier-tip-icon"><i data-lucide="shield-check"></i></span><div><b>Validación protegida</b><p>Los cupones y EcoID caducan o se consumen al validarse. Los puntos se asignan desde el servidor a la cuenta correcta.</p></div></section></aside></section></main>`;
+    root.innerHTML = `<header class="cashier-topbar"><a class="cashier-brand"><span class="cashier-brand-mark"><i data-lucide="leaf"></i></span><span><b>VilaCircula</b><small>Terminal de comercio</small></span></a><div class="cashier-top-actions"><span class="cashier-merchant"><i data-lucide="store"></i>${dashboard.merchant || 'Comercio'}</span><button class="icon-button" id="cashier-change-password" aria-label="Cambiar contraseña" title="Cambiar contraseña"><i data-lucide="key-round"></i></button><button class="icon-button" id="cashier-exit" aria-label="Salir de caja" title="Salir de caja"><i data-lucide="log-out"></i></button></div></header><main class="cashier-main"><section class="cashier-welcome"><div><span class="eyebrow">PANEL DE CAJA</span><h1>Hola, ${cashierName || 'equipo'}.</h1><p>Actividad y herramientas de ${dashboard.merchant || 'tu comercio'}.</p></div><span class="cashier-live"><i></i> CONECTADO</span></section>${dashboard.is_demo ? '<p class="cashier-demo-note">Entorno de demostración</p>' : ''}<section class="cashier-metrics" aria-label="Resumen de hoy"><article class="cashier-metric"><span><i data-lucide="ticket-check"></i>Cupones canjeados</span><strong>${today.successful_coupons || 0}</strong><small>hoy · ${week.successful_coupons || 0} esta semana</small></article><article class="cashier-metric cashier-metric-points"><span><i data-lucide="scan-line"></i>EcoID validados</span><strong>${today.ecoid_scans || 0}</strong><small>hoy · ${week.ecoid_scans || 0} esta semana</small></article><article class="cashier-metric"><span><i data-lucide="activity"></i>Actividad total</span><strong>${(today.successful_coupons || 0) + (today.ecoid_scans || 0)}</strong><small>operaciones completadas hoy</small></article><article class="cashier-metric cashier-metric-alert"><span><i data-lucide="triangle-alert"></i>Incidencias</span><strong>${today.failed_coupons || 0}</strong><small>cupones rechazados hoy</small></article></section><section class="cashier-columns"><div class="cashier-main-column"><section class="cashier-scanner-panel"><div class="cashier-section-heading"><div><span class="eyebrow">VALIDACIÓN SEGURA</span><h2>Escanear cliente</h2><p>Lee un cupón para canjearlo o un EcoID para sumar puntos.</p></div><span class="cashier-scan-icon"><i data-lucide="scan-qr-code"></i></span></div><div class="cashier-scanner-preview" id="cashier-preview" hidden><video id="cashier-video" playsinline muted></video><span class="cashier-scan-frame"></span></div><div class="cashier-feedback ${feedback ? 'is-success' : ''}" id="cashier-feedback" role="status" aria-live="polite">${feedback ? `<i data-lucide="circle-check"></i><span><b>${feedback.title}</b><small>${feedback.description}</small></span>` : '<i data-lucide="scan-line"></i><span><b>Listo para escanear</b><small>El QR se valida con el servidor y solo puede usarse una vez.</small></span>'}</div><p class="cashier-scan-status" id="cashier-status">Cámara apagada. Pulsa para iniciar.</p>${dashboard.is_demo ? '' : '<label class="cashier-eco-purchase"><input id="cashier-eco-purchase" type="checkbox"><span>Compra ECO confirmada por el comercio</span></label>'}<div class="cashier-scan-actions"><button class="primary" id="cashier-start-scan"><i data-lucide="camera"></i>Escanear QR</button><button class="cashier-secondary" id="cashier-next-scan" ${feedback ? '' : 'hidden'}><i data-lucide="scan-line"></i>Escanear siguiente</button></div><div class="cashier-manual-entry"><label for="manual-coupon-code">Código manual</label><div class="row"><input id="manual-coupon-code" type="text" autocomplete="off" placeholder="VC-... o VCID-..." maxlength="40" /><button class="primary" type="button" id="manual-coupon-submit">Validar</button></div></div></section><section class="cashier-activity-panel"><div class="cashier-section-heading"><div><span class="eyebrow">REGISTRO DEL COMERCIO</span><h2>Actividad reciente</h2></div><button class="cashier-refresh" id="cashier-refresh" aria-label="Actualizar actividad" title="Actualizar"><i data-lucide="refresh-cw"></i></button></div>${activities.length ? `<div class="cashier-activity-list">${activities.map(item => `<article class="cashier-activity-row"><span class="cashier-activity-icon ${item.kind}"><i data-lucide="${item.kind === 'ecoid' ? 'scan-line' : item.status === 'success' ? 'ticket-check' : 'circle-alert'}"></i></span><span><b>${item.title}</b><small>${item.detail}</small></span><time>${new Date(item.validated_at || item.created_at).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</time></article>`).join('')}</div>` : '<p class="cashier-empty">Aún no hay operaciones registradas.</p>'}</section></div><aside class="cashier-side-column"><section class="cashier-chart-panel"><div class="cashier-section-heading"><div><span class="eyebrow">ÚLTIMOS 7 DÍAS</span><h2>Ritmo del comercio</h2></div></div><div class="cashier-chart-legend"><span><i class="coupon-key"></i>Cupones</span><span><i class="ecoid-key"></i>EcoID</span></div><div class="cashier-chart" role="img" aria-label="Operaciones diarias por tipo">${cashierChart(dashboard.activity_by_day || [])}</div><div class="cashier-chart-caption">Cada barra representa operaciones validadas en el día.</div></section><section class="cashier-tip"><span class="cashier-tip-icon"><i data-lucide="shield-check"></i></span><div><b>Validación protegida</b><p>Los cupones y EcoID caducan o se consumen al validarse. Los puntos se asignan desde el servidor a la cuenta correcta.</p></div></section></aside></section></main>`;
     if (feedback) root.querySelector('#cashier-feedback')?.classList.add('is-success');
     window.lucide?.createIcons();
     root.querySelector('#cashier-start-scan').addEventListener('click', () => startCashierScanner(cashierToken, root));
@@ -861,7 +975,8 @@
     }
     try {
       if (code.startsWith('VCID-')) {
-        const result = await requestWithToken('/cashier/eco-id/scan', { method: 'POST', body: JSON.stringify({ code }) }, cashierToken);
+        const ecoPurchase = cashierRoot.querySelector('#cashier-eco-purchase')?.checked === true;
+        const result = await requestWithToken('/cashier/eco-id/scan', { method: 'POST', body: JSON.stringify({ code, eco_purchase: ecoPurchase }) }, cashierToken);
         await showCashierSuccess(cashierRoot, { title: `+${result.points} EcoPuntos`, description: `${escapeHtml(result.display_name)} · ${escapeHtml(result.merchant)}`, kind: 'ecoid' }, cashierToken);
       } else {
         const result = await requestWithToken('/cashier/coupons/redeem', { method: 'POST', body: JSON.stringify({ code }) }, cashierToken);
@@ -1199,6 +1314,165 @@
     }
   };
 
+  function renderStepCounter() {
+    const count = document.querySelector('#step-count');
+    const goal = document.querySelector('#step-goal');
+    const progress = document.querySelector('#step-progress');
+    const statusNode = document.querySelector('#step-counter-status');
+    const rewardLabel = document.querySelector('#step-reward-label');
+    const button = document.querySelector('#start-step-counter');
+    if (count) count.textContent = `${stepCount.toLocaleString(window.vilaLocale?.() || 'ca-ES')} pasos`;
+    if (goal) goal.textContent = `de ${stepGoal.toLocaleString(window.vilaLocale?.() || 'ca-ES')}`;
+    if (progress) progress.style.width = `${Math.min(100, stepCount / stepGoal * 100)}%`;
+    if (rewardLabel) rewardLabel.textContent = stepRewarded ? '✓ +30 pts conseguidos' : '+30 pts al alcanzar meta';
+    if (button) button.textContent = stepSensorActive ? 'Pausar contador' : 'Activar contador de pasos';
+    if (statusNode && !statusNode.dataset.error) {
+      statusNode.textContent = stepRewarded
+        ? '¡Meta diaria alcanzada! Tus 30 EcoPunts ya están en el saldo.'
+        : stepSensorActive
+          ? 'Contador activo. Mantén VilaCircula abierta para registrar tus pasos.'
+          : 'Estimación con el acelerómetro mientras la app está abierta.';
+    }
+  }
+
+  async function loadTodaySteps() {
+    const result = await request('/steps/today');
+    if (stepActivityDate !== result.activity_date) {
+      stepCount = result.steps;
+      stepActivityDate = result.activity_date;
+    } else {
+      stepCount = Math.max(stepCount, result.steps);
+    }
+    stepGoal = result.goal;
+    stepRewarded = result.rewarded;
+    const statusNode = document.querySelector('#step-counter-status');
+    if (statusNode) delete statusNode.dataset.error;
+    renderStepCounter();
+    return result;
+  }
+
+  async function syncStepCount() {
+    if (stepSyncBusy || !stepActivityDate || !stepSensorActive) return;
+    stepSyncBusy = true;
+    try {
+      const result = await request('/steps/sync', {
+        method: 'POST',
+        body: JSON.stringify({ activity_date: stepActivityDate, steps: stepCount })
+      });
+      stepCount = result.steps;
+      stepRewarded = result.rewarded;
+      stepActivityDate = result.activity_date;
+      const statusNode = document.querySelector('#step-counter-status');
+      if (statusNode) delete statusNode.dataset.error;
+      renderStepCounter();
+      if (result.rewarded_now) {
+        const dashboard = await request('/dashboard');
+        window.setCitizenDashboard(dashboard);
+        notifyUser('¡Meta de pasos alcanzada!', 'Has recibido 30 EcoPunts por alcanzar 5.000 pasos hoy.');
+        setStatus('Meta diaria alcanzada: +30 EcoPunts.', 'connected');
+      }
+    } catch (error) {
+      const statusNode = document.querySelector('#step-counter-status');
+      if (statusNode) {
+        statusNode.dataset.error = 'true';
+        statusNode.textContent = getApiErrorMessage(error);
+      }
+      if (/El día de actividad ha cambiado/.test(error.message)) {
+        stepActivityDate = null;
+        try {
+          await loadTodaySteps();
+        } catch (refreshError) {
+          console.error('No se pudo actualizar el contador de pasos del nuevo día.', refreshError);
+        }
+      }
+    } finally {
+      stepSyncBusy = false;
+    }
+  }
+
+  function handleDeviceMotion(event) {
+    const acceleration = event.acceleration;
+    const accelerationWithGravity = event.accelerationIncludingGravity;
+    const source = acceleration && acceleration.x !== null && acceleration.y !== null && acceleration.z !== null
+      ? acceleration
+      : accelerationWithGravity;
+    if (!source || source.x === null || source.y === null || source.z === null) return;
+    const magnitude = Math.hypot(source.x, source.y, source.z);
+    if (stepMotionBaseline === null) stepMotionBaseline = magnitude;
+    const dynamicAcceleration = magnitude - stepMotionBaseline;
+    stepMotionBaseline = stepMotionBaseline * 0.9 + magnitude * 0.1;
+    const now = performance.now();
+    if (dynamicAcceleration < 0.35) stepMotionArmed = true;
+    if (dynamicAcceleration > 1.2 && stepMotionArmed && now - lastDetectedStepAt >= 300) {
+      stepMotionArmed = false;
+      lastDetectedStepAt = now;
+      stepCount += 1;
+      renderStepCounter();
+      if (stepCount >= stepGoal && !stepRewarded) void syncStepCount();
+    }
+  }
+
+  async function startStepCounter(button) {
+    const motionEvent = window.DeviceMotionEvent;
+    const statusNode = document.querySelector('#step-counter-status');
+    if (!window.isSecureContext || !motionEvent) {
+      if (statusNode) statusNode.textContent = 'Este navegador no permite leer el acelerómetro. Usa un dispositivo compatible y una conexión segura (HTTPS).';
+      return;
+    }
+    if (stepSensorActive) {
+      window.removeEventListener('devicemotion', handleDeviceMotion);
+      clearInterval(stepSyncTimer);
+      stepSyncTimer = null;
+      await syncStepCount();
+      stepSensorActive = false;
+      renderStepCounter();
+      return;
+    }
+
+    try {
+      if (typeof motionEvent.requestPermission === 'function') {
+        const permission = await motionEvent.requestPermission();
+        if (permission !== 'granted') throw new Error('Da permiso al acelerómetro para contar pasos.');
+      }
+      const current = await loadTodaySteps();
+      if (!current.rewarded) {
+        stepSensorActive = true;
+        stepMotionBaseline = null;
+        stepMotionArmed = true;
+        lastDetectedStepAt = 0;
+        window.addEventListener('devicemotion', handleDeviceMotion);
+        stepSyncTimer = setInterval(syncStepCount, 15000);
+        renderStepCounter();
+      }
+    } catch (error) {
+      if (statusNode) {
+        statusNode.dataset.error = 'true';
+        statusNode.textContent = getApiErrorMessage(error);
+      }
+      button.disabled = false;
+    }
+  }
+
+  document.querySelector('#start-step-counter')?.addEventListener('click', event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    startStepCounter(button).finally(() => {
+      if (button.isConnected) button.disabled = false;
+    });
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      void syncStepCount();
+      return;
+    }
+    if (stepSensorActive) {
+      loadTodaySteps().catch(error => {
+        console.error('No se pudo cargar el contador de pasos al volver a la app.', error);
+      });
+    }
+  });
+
   async function apiRedeemReward(id) {
     const reward = rewards.find(item => item.id === id);
     if (!reward) return;
@@ -1222,7 +1496,7 @@
       setStatus('Escaneo de prueba registrado en SQLite · +10 EcoPuntos.', 'demo');
       document.querySelector('#close-id')?.click();
     } catch (error) {
-      setStatus(error.message, 'error');
+      setStatus(getApiErrorMessage(error), 'error');
       button.disabled = false;
     }
   }
@@ -1337,7 +1611,7 @@
   }
 
   async function initialize() {
-    await registerServiceWorker();
+    void registerServiceWorker();
     setConnectionState(navigator.onLine);
     if (token) {
       try {

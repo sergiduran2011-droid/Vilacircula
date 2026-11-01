@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,8 @@ class AppConfig:
     allowed_origins: list[str]
     initial_cashier_password: str
     google_client_id: str
+    admin_emails: frozenset[str]
+    school_registration_codes: dict[str, str]
 
     @classmethod
     def from_env(
@@ -54,6 +57,8 @@ class AppConfig:
         admin_key: str | None = None,
         google_client_id: str | None = None,
         environment: str | None = None,
+        admin_emails: set[str] | frozenset[str] | None = None,
+        school_registration_codes: dict[str, str] | None = None,
     ) -> "AppConfig":
         db_path = Path(database_path or os.getenv("VILACIRCULA_DATABASE", DEFAULT_DATABASE))
         database_url = (
@@ -91,6 +96,29 @@ class AppConfig:
             google_client_id if google_client_id is not None
             else os.getenv("VILACIRCULA_GOOGLE_CLIENT_ID", "")
         ).strip()
+        configured_admin_emails = admin_emails if admin_emails is not None else {
+            email.strip().casefold()
+            for email in os.getenv("VILACIRCULA_ADMIN_EMAILS", "").split(",")
+            if email.strip()
+        }
+        configured_school_codes = school_registration_codes
+        if configured_school_codes is None:
+            try:
+                configured_school_codes = json.loads(os.getenv("VILACIRCULA_SCHOOL_CODES", "{}"))
+            except json.JSONDecodeError as error:
+                raise RuntimeError("VILACIRCULA_SCHOOL_CODES must be a JSON object mapping school names to registration codes.") from error
+        if not isinstance(configured_school_codes, dict):
+            raise RuntimeError("VILACIRCULA_SCHOOL_CODES must be a JSON object mapping school names to registration codes.")
+        school_registration_codes = {}
+        for school, code in configured_school_codes.items():
+            if school not in {"Goar", "Torre-roja", "Josep Mestres", "Miramar", "Olímpia", "Sales"}:
+                raise RuntimeError(f"Unknown school in VILACIRCULA_SCHOOL_CODES: {school}")
+            if not isinstance(code, str) or not code.strip():
+                raise RuntimeError(f"Registration code for {school} must be a non-empty string.")
+            normalized_code = code.strip().casefold()
+            if normalized_code in school_registration_codes.values():
+                raise RuntimeError("VILACIRCULA_SCHOOL_CODES must use a unique code for each school.")
+            school_registration_codes[school] = normalized_code
         return cls(
             database_path=db_path,
             database_url=database_url,
@@ -102,4 +130,6 @@ class AppConfig:
             allowed_origins=allowed_origins,
             initial_cashier_password=initial_cashier_password,
             google_client_id=configured_google_client_id,
+            admin_emails=frozenset(email.strip().casefold() for email in configured_admin_emails),
+            school_registration_codes=school_registration_codes,
         )

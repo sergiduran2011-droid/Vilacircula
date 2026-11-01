@@ -14,6 +14,9 @@ Cuando Render solicite valores secretos, introduce:
 
 - `VILACIRCULA_DATABASE_URL`: la URI PostgreSQL del Transaction pooler de Supabase.
 - `VILACIRCULA_INITIAL_CASHIER_PASSWORD`: una contraseña temporal fuerte para las cuentas de caja de ejemplo. Cámbiala después del primer acceso.
+- `VILACIRCULA_ADMIN_EMAILS`: correos verificados de las personas administradoras, separados por comas.
+- `VILACIRCULA_GOOGLE_CLIENT_ID`: ID del cliente OAuth web de Google configurado para el origen de GitHub Pages.
+- `VILACIRCULA_SCHOOL_CODES`: objeto JSON con un código exclusivo por centro, por ejemplo `{"Goar":"CODIGO-GOAR","Sales":"CODIGO-SALES"}`. Sustituye estos valores por códigos reales y no los publiques.
 
 `VILACIRCULA_ADMIN_KEY` se genera automáticamente por Render. No copies ninguno de estos secretos a GitHub Pages ni a archivos versionados.
 
@@ -31,4 +34,6 @@ La base empieza sin perfiles ni cupones. Al iniciar FastAPI se crean las tablas 
 
 ## Alcance actual
 
-Esta publicación hace persistentes las cuentas, sesiones, puntos, historial y cupones existentes de la app. La sincronización de pasos, los desafíos y las recompensas/comercios ilustrativos siguen siendo funciones de demostración; no se conectan automáticamente a sensores ni a comercios reales. En producción, la suma de puntos simulada está desactivada y el canje de cupones se realiza desde una caja autorizada.
+Esta publicación hace persistentes las cuentas, sesiones, puntos, pasos diarios sincronizados por la PWA, historial y cupones existentes de la app. El contador de pasos usa DeviceMotion como estimación mientras la aplicación está abierta y requiere permisos del navegador y HTTPS; no sustituye Apple Health/Health Connect ni funciona de forma garantizada en segundo plano. La API concede 30 EcoPunts una sola vez al día al alcanzar 5.000 pasos. Para calcular el CO₂ de compras, una caja de un comercio real debe confirmar explícitamente la compra ECO al validar el EcoID; las cajas de demostración no suman ese impacto. Los desafíos y las recompensas/comercios ilustrativos siguen siendo funciones de demostración. En producción, la suma de puntos simulada está desactivada y el canje de cupones se realiza desde una caja autorizada.
+
+La información legal de privacidad, términos y galetes está disponible en `legal.html`. El registro de estudiantes requiere aceptar el consentimiento correspondiente. El formulario de alta comercial prepara un correo para `sergiduran2011@gmail.com`; la solicitud debe enviarse desde el cliente de correo y revisarse antes de publicar el comercio.

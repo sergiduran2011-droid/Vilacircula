@@ -1,0 +1,26 @@
+:root{color-scheme:light;--ink:#19281f;--muted:#667266;--green:#193e30;--paper:#f5f7f1;--line:#e4e9df}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 system-ui,-apple-system,sans-serif}
+.legal-page{width:min(100% - 32px,780px);margin:0 auto;padding:28px 0 56px}
+.legal-back{color:var(--green);font-size:13px;font-weight:700;text-decoration:none}
+.legal-page header{padding:42px 0 24px}
+.legal-page header span{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em}
+.legal-page h1{margin:8px 0;font-size:clamp(32px,6vw,48px);line-height:1.1}
+.legal-page header p,.legal-page section p,.legal-page li{color:#4d5a4f}
+.legal-page section{margin:14px 0;padding:24px;border:1px solid var(--line);border-radius:16px;background:#fff;scroll-margin-top:20px}
+.legal-page h2{margin:0 0 14px;font-size:21px}
+.legal-page ul{padding-left:22px}
+.legal-page li+li{margin-top:9px}
+.legal-page a{color:var(--green);font-weight:700}
+.legal-page footer{padding-top:18px;color:var(--muted);font-size:12px}
+.legal-footer{display:flex;justify-content:space-between;align-items:center;gap:18px;margin:32px 0 20px;padding:18px 0;border-top:1px solid var(--line);color:#667266;font-size:10px}
+.legal-footer>div{display:grid;gap:3px}
+.legal-footer>div strong{color:var(--green);font-size:12px}
+.legal-footer nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px}
+.legal-footer a,.legal-footer button{padding:0;border:0;background:none;color:var(--green);font:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.legal-consent{display:flex!important;align-items:flex-start;gap:9px;margin:14px 0!important;color:#4d5a4f;font-size:10px!important;font-weight:500!important;line-height:1.55}
+.profile-modal .legal-consent input{width:16px;height:16px;flex:0 0 16px;margin:1px 0 0;accent-color:var(--green)}
+.legal-consent a{color:var(--green)}
+.merchant-registration{max-height:calc(100vh - 40px);overflow:auto}
+.merchant-registration>p{line-height:1.55}
+@media(max-width:640px){.legal-footer{align-items:flex-start;flex-direction:column;margin-bottom:90px}.legal-footer nav{gap:10px 14px}.legal-page section{padding:19px}.legal-page header{padding-top:30px}}
