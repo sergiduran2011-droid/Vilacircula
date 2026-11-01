@@ -1,5 +1,5 @@
-const CACHE_NAME = 'vilacircula-v37';
-const APP_FILES = ['./', './index.html', './legal.html', './legal.css?v=1', './i18n.js?v=6', './accessibility.css?v=1', './manifest.json', './api-config.json?v=2', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './viladecans.js', './viladecans.css', './features.css?v=3', './api-client.js?v=33', './api-client.css?v=30', './cashier.css', './cashier-dashboard.css'];
+const CACHE_NAME = 'vilacircula-v38';
+const APP_FILES = ['./', './index.html', './legal.html', './legal.css?v=1', './i18n.js?v=6', './accessibility.css?v=1', './manifest.json', './api-config.json?v=3', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './viladecans.js', './viladecans.css', './features.css?v=3', './api-client.js?v=33', './api-client.css?v=30', './cashier.css', './cashier-dashboard.css'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_FILES)).then(() => self.skipWaiting()));

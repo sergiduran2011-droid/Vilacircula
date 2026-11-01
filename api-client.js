@@ -1,6 +1,6 @@
 (() => {
   const TOKEN_KEY = 'vilacircula-api-token';
-  const API_CONFIG = fetch('./api-config.json?v=2')
+  const API_CONFIG = fetch('./api-config.json?v=3')
     .then(response => response.ok ? response.json() : {})
     .catch(() => ({}));
 

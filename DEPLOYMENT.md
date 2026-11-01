@@ -22,13 +22,13 @@ Cuando Render solicite valores secretos, introduce:
 
 ## 3. Activar Pages
 
-`api-config.json` ya apunta a `https://vilacircula-api-sergiduran2011-droid.onrender.com`. En Render, comprueba que el servicio tenga ese dominio; si Render asigna otro, cambia `apiBaseUrl` a la URL que muestre el panel y publica el cambio en GitHub Pages.
+`api-config.json` apunta a `https://vilacircula-api.onrender.com`. En Render, comprueba que el servicio tenga ese dominio; si Render asigna otro, cambia `apiBaseUrl` a la URL que muestre el panel y publica el cambio en GitHub Pages.
 
 La configuración CORS del Blueprint permite el origen `https://sergiduran2011-droid.github.io`, que es el origen del sitio aunque la página viva bajo `/Vilacircula/`.
 
 ## 4. Comprobar
 
-Abre `https://vilacircula-api-sergiduran2011-droid.onrender.com/api/v1/health`. Debe responder con `status: ok` y `persistent_database: postgresql`. Luego prueba desde Pages el registro, el inicio de sesión, la creación de un cupón y el acceso de caja.
+Abre `https://vilacircula-api.onrender.com/api/v1/health`. Debe responder con `status: ok` y `persistent_database: postgresql`. Luego prueba desde Pages el registro, el inicio de sesión, la creación de un cupón y el acceso de caja.
 
 La base empieza sin perfiles ni cupones. Al iniciar FastAPI se crean las tablas y se cargan las fichas de comercios y las recompensas de ejemplo. Las cuentas de caja de muestra solo se crean si se configura la contraseña inicial.
 
