@@ -15,6 +15,9 @@
     'Liga de institutos': 'Lliga d’instituts',
     'Insti Sales lidera esta semana.': 'L’institut Sales lidera aquesta setmana.',
     'Abrir usuario y cuenta': 'Obrir usuari i compte',
+    'Idioma': 'Idioma',
+    'Idioma de la aplicación': 'Idioma de l’aplicació',
+    'Castellano': 'Castellà',
     'Notificaciones': 'Notificacions',
     'Cada pequeño gesto hace una ciudad mejor.': 'Cada petit gest fa una ciutat millor.',
     'TU SALDO ECO': 'EL TEU SALDO ECO',
@@ -67,7 +70,7 @@
     'Insti Sales · 3.º ESO': 'Institut Sales · 3r d’ESO',
     'Líderes de Viladecans esta semana': 'Líders de Viladecans aquesta setmana',
     'Pequeños gestos, grandes premios.': 'Petits gestos, grans premis.',
-    'Final de liga · 6 de noviembre': 'Final de lliga · 6 de novembre',
+    'Final de liga · 18 de junio': 'Final de lliga · 18 de juny',
     'VILADECANS · PERFIL CIUDADANO': 'VILADECANS · PERFIL CIUTADÀ',
     'JUEVES, 25 DE SEPTIEMBRE': 'DIJOUS, 25 DE SETEMBRE',
     'Cerca a prop meu': 'Cerca a prop meu',
@@ -613,18 +616,20 @@
   }
 
   function addLanguageSelector() {
-    if (document.querySelector('#language-switcher')) return;
+    const actions = document.querySelector('#profile-dialog .profile-actions');
+    if (!actions || actions.querySelector('#language-switcher')) return;
     const label = document.createElement('label');
-    label.className = 'language-switcher';
+    label.className = 'language-switcher profile-language-switcher';
     label.htmlFor = 'language-switcher';
     label.innerHTML = '<span>Idioma</span><select id="language-switcher" aria-label="Idioma de la aplicación"><option value="ca">Català</option><option value="es">Castellano</option></select>';
-    document.body.insertBefore(label, document.body.firstElementChild);
+    actions.append(label);
     label.querySelector('select').addEventListener('change', event => applyLanguage(event.currentTarget.value));
+    label.querySelector('select').value = language;
   }
 
   const accessibilityStyle = document.createElement('link');
   accessibilityStyle.rel = 'stylesheet';
-  accessibilityStyle.href = './accessibility.css?v=1';
+  accessibilityStyle.href = './accessibility.css?v=2';
   document.head.append(accessibilityStyle);
 
   function addSkipLink() {
@@ -697,10 +702,10 @@
 
   window.vilaLocale = locale;
   window.vilaLanguage = () => language;
+  window.vilaMountLanguageSelector = addLanguageSelector;
   window.vilaTranslate = value => language === 'ca'
     ? translateText(String(value))
     : translateToSpanish(String(value));
-  addLanguageSelector();
   addSkipLink();
   applyLanguage(language);
 })();

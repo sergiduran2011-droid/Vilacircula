@@ -14,10 +14,10 @@ a{color:#174c38}
 .skip-link{position:fixed;z-index:20000;left:12px;top:10px;transform:translateY(-160%);padding:10px 14px;border-radius:8px;background:#193e30;color:#fff;font-weight:800}
 .skip-link:focus{transform:translateY(0)}
 body.auth-locked .skip-link{display:none}
-.language-switcher{position:fixed;z-index:10001;top:12px;right:14px;display:flex;align-items:center;gap:6px;padding:5px 8px;border:1px solid #cbd4c8;border-radius:9px;background:#fff;color:#23372b;font-size:11px;font-weight:700;box-shadow:0 2px 8px #19281f18}
+.language-switcher{position:static;z-index:auto;display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;grid-column:1/-1;padding:10px 12px;border:1px solid #dfe6d9;border-radius:10px;background:#f7f9f4;color:#23372b;font-size:12px;font-weight:700}
 .language-switcher select{max-width:112px;border:0;background:transparent;color:#193e30;font-size:11px;font-weight:800}
 .language-switcher select:focus-visible{outline-offset:2px!important}
 .modal-backdrop [role="dialog"]{max-height:calc(100vh - 32px);overflow:auto}
 .merchant-registration{scrollbar-gutter:stable}
-@media(max-width:640px){.language-switcher{top:9px;right:9px;padding:4px 6px;font-size:10px}.language-switcher select{max-width:92px;font-size:10px}}
+@media(max-width:640px){.language-switcher{padding:10px 12px;font-size:12px}.language-switcher select{max-width:112px;font-size:11px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}

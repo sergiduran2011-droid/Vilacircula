@@ -654,6 +654,7 @@
     const profileAction = 'Editar nombre';
     overlay.innerHTML = `<section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title"><button class="icon-button modal-close" id="profile-close" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">PERFIL VILACIRCULA</span><h2 id="profile-title">Tu cuenta</h2><p>${profile?.display_name || ''} · ${profile?.username || 'Modo local'}</p><div class="profile-actions"><button class="profile-action" id="edit-citizen-profile"><i data-lucide="user-round-cog"></i>${profileAction}</button><button class="profile-action" id="edit-citizen-credentials"><i data-lucide="key-round"></i>Usuario y contraseña</button><button class="profile-action" id="open-cashier"><i data-lucide="store"></i>Zona de caja de comercio</button>${adminAction}<button class="profile-action danger" id="citizen-logout"><i data-lucide="log-out"></i>Cerrar sesión</button></div><p class="profile-error" id="profile-error" role="alert"></p></section>`;
     document.querySelector('#modal-root').append(overlay);
+    window.vilaMountLanguageSelector?.();
     window.lucide?.createIcons();
     overlay.querySelector('#profile-close').addEventListener('click', closeProfileDialog);
     overlay.addEventListener('click', event => { if (event.target === overlay) closeProfileDialog(); });

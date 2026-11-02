@@ -45,6 +45,29 @@
     });
   }
 
+  function updateLeagueCountdown() {
+    const value = document.querySelector('.countdown b');
+    const dateLabel = document.querySelector('.countdown small');
+    if (!value || !dateLabel) return;
+
+    const now = new Date();
+    let delivery = new Date(now.getFullYear(), 5, 18, 23, 59, 59, 999);
+    if (delivery <= now) delivery = new Date(now.getFullYear() + 1, 5, 18, 23, 59, 59, 999);
+
+    const remaining = Math.max(0, delivery.getTime() - now.getTime());
+    const days = Math.floor(remaining / 86_400_000);
+    const hours = Math.floor(remaining % 86_400_000 / 3_600_000);
+    const minutes = Math.floor(remaining % 3_600_000 / 60_000);
+    const seconds = Math.floor(remaining % 60_000 / 1_000);
+    const catalan = window.vilaLanguage?.() !== 'es';
+    value.textContent = catalan
+      ? `${days} dies · ${String(hours).padStart(2, '0')} h · ${String(minutes).padStart(2, '0')} min · ${String(seconds).padStart(2, '0')} s`
+      : `${days} días · ${String(hours).padStart(2, '0')} h · ${String(minutes).padStart(2, '0')} min · ${String(seconds).padStart(2, '0')} s`;
+    dateLabel.textContent = `${catalan ? 'Final de lliga' : 'Final de liga'} · ${new Intl.DateTimeFormat(window.vilaLocale?.() || 'ca-ES', { day: 'numeric', month: 'long' }).format(delivery)}`;
+    value.setAttribute('role', 'timer');
+    value.setAttribute('aria-live', 'off');
+  }
+
   function updateWelcomeDate() {
     const now = new Date();
     const hour = now.getHours();
@@ -61,6 +84,7 @@
       heading.textContent = `${greeting}, ${name} `;
       if (sparkle) heading.append(sparkle);
     }
+
     const dateLabel = document.querySelector('.welcome .eyebrow');
     if (dateLabel) {
       dateLabel.textContent = new Intl.DateTimeFormat(window.vilaLocale?.() || 'ca-ES', {
@@ -593,6 +617,9 @@
   function installEnhancements() {
     setProfile();
     window.setInterval(updateWelcomeDate, 60_000);
+    window.setInterval(updateLeagueCountdown, 1_000);
+    window.addEventListener('vilacircula:languagechange', updateLeagueCountdown);
+    updateLeagueCountdown();
     ensureCouponHistory();
     window.drawShops = renderShopList;
     window.drawWallet = renderWallet;
