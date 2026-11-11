@@ -1,5 +1,5 @@
-const CACHE_NAME = 'vilacircula-v46';
-const APP_FILES = ['./', './index.html', './legal.html', './legal.css?v=1', './i18n.js?v=7', './accessibility.css?v=2', './manifest.json?v=2', './api-config.json?v=3', './icons/icon.svg', './icons/boot-mark.png', './icons/boot-print-192.png', './icons/boot-print-512.png', './icons/boot-print-maskable-512.png', './icons/icon-192.png', './icons/icon-512.png', './viladecans.js', './viladecans.css', './features.css?v=3', './api-client.js?v=36', './api-client.css?v=30', './cashier.css', './cashier-dashboard.css', './cashier-rewards.css?v=2'];
+const CACHE_NAME = 'vilacircula-v47';
+const APP_FILES = ['./', './index.html', './legal.html', './legal.css?v=1', './i18n.js?v=7', './accessibility.css?v=2', './manifest.json?v=2', './api-config.json?v=3', './icons/icon.svg', './icons/boot-mark.png', './icons/boot-print-192.png', './icons/boot-print-512.png', './icons/boot-print-maskable-512.png', './icons/icon-192.png', './icons/icon-512.png', './viladecans.js', './viladecans.css', './features.css?v=3', './api-client.js?v=37', './api-client.css?v=30', './cashier.css', './cashier-dashboard.css', './cashier-rewards.css?v=3'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_FILES)).then(() => self.skipWaiting()));

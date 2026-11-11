@@ -9,6 +9,10 @@
 .cashier-reward-form{display:grid;grid-template-columns:1fr 170px;gap:12px;margin-top:18px}
 .cashier-reward-form label{display:grid;gap:6px;color:#52634f;font-size:10px;font-weight:800}
 .cashier-reward-form label:first-child,.cashier-reward-form label:nth-child(3){grid-column:1/-1}
+.cashier-reward-form .cashier-student-featured{grid-column:1/-1;display:flex;align-items:flex-start;gap:9px;padding:12px;border:1px solid #e4e9df;border-radius:8px;background:#f8faf5}
+.cashier-student-featured input{width:16px;min-height:16px;flex:0 0 16px;margin:1px 0 0;padding:0;accent-color:#416943}
+.cashier-student-featured span{display:grid;gap:4px;color:#405d36;font-size:10px;font-weight:800;line-height:1.4}
+.cashier-student-featured small{color:#687466;font-size:9px;font-weight:500;line-height:1.5}
 .cashier-reward-form input,.cashier-reward-form textarea{width:100%;min-height:40px;padding:10px 11px;border:1px solid #dfe6dc;border-radius:7px;background:#fff;color:#19281f;font:12px Manrope,sans-serif}
 .cashier-reward-form textarea{min-height:74px;resize:vertical}
 .cashier-reward-form input:focus,.cashier-reward-form textarea:focus{outline:2px solid #7a9c5c;outline-offset:1px}

@@ -183,6 +183,10 @@
     window.lucide?.createIcons();
   }
 
+  window.addEventListener('vilacircula:languagechange', () => {
+    if (document.body.dataset.role) renderWallet();
+  });
+
   function renderPersonalImpact(impact, contribution) {
     document.querySelector('.personal-impact')?.remove();
     const panel = document.createElement('section');
@@ -317,8 +321,9 @@
     save();
     update();
     renderWallet();
-    document.querySelectorAll('#rewards .reward').forEach((card, index) => {
-      if (!prizes[index]?.is_demo) return;
+    document.querySelectorAll('#rewards .reward').forEach(card => {
+      const rewardId = card.querySelector('[data-redeem]')?.dataset.redeem;
+      if (!prizes.find(prize => prize.id === rewardId)?.is_demo) return;
       const tag = document.createElement('span');
       tag.className = 'demo-tag';
       tag.textContent = 'Oferta de demostración';
@@ -441,11 +446,22 @@
   }
 
   function renderWallet() {
-    document.querySelector('#rewards').innerHTML = prizes.map(prize => {
+    const catalog = document.querySelector('#rewards');
+    const renderCards = items => items.map(prize => {
       const missing = Math.max(0, prize.cost - state.balance);
       const afford = missing === 0;
       return `<article class="reward"><div class="reward-art ${escapeHtml(prize.art)}"><i data-lucide="${escapeHtml(prize.icon)}"></i></div><div class="reward-info"><span class="merchant-tag">${escapeHtml(prize.store)}</span><h3>${escapeHtml(prize.name)}</h3><p>${escapeHtml(prize.description)}</p><div class="reward-foot"><span class="cost">${escapeHtml(prize.cost)} ECO PTS</span><button class="redeem" data-redeem="${escapeHtml(prize.id)}" ${afford ? '' : 'disabled'}>${afford ? 'Canjear' : `Faltan ${missing}`}</button></div></div></article>`;
     }).join('');
+    const studentOffers = prizes.filter(prize => prize.student_featured);
+    const otherOffers = prizes.filter(prize => !prize.student_featured);
+    const isStudent = document.body.dataset.role === 'student';
+    const isCatalan = window.vilaLocale?.().startsWith('ca');
+    catalog.classList.toggle('has-student-groups', isStudent && studentOffers.length > 0);
+    if (isStudent && studentOffers.length > 0) {
+      catalog.innerHTML = `<section class="reward-group"><div class="section-head reward-group-heading"><h2>${isCatalan ? 'Per a estudiants' : 'Para estudiantes'}</h2><span class="eyebrow">${isCatalan ? 'OFERTES DESTACADES' : 'OFERTAS DESTACADAS'}</span></div><div class="rewards reward-group-grid">${renderCards(studentOffers)}</div></section>${otherOffers.length ? `<section class="reward-group"><div class="section-head reward-group-heading"><h2>${isCatalan ? 'Altres ofertes' : 'Otras ofertas'}</h2></div><div class="rewards reward-group-grid">${renderCards(otherOffers)}</div></section>` : ''}`;
+    } else {
+      catalog.innerHTML = renderCards(prizes);
+    }
     const count = document.querySelector('#coupon-count');
     count.textContent = `${state.coupons.length} VALES`;
     count.parentElement.classList.add('coupon-heading');

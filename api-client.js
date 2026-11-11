@@ -980,14 +980,14 @@
     if (!document.querySelector('link[data-cashier-rewards-styles]')) {
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
-      stylesheet.href = './cashier-rewards.css?v=2';
+      stylesheet.href = './cashier-rewards.css?v=3';
       stylesheet.dataset.cashierRewardsStyles = '';
       document.head.append(stylesheet);
     }
     const panel = document.createElement('section');
     panel.id = 'cashier-rewards-panel';
     panel.className = 'cashier-rewards-panel';
-    panel.innerHTML = '<div class="cashier-section-heading"><div><span class="eyebrow">CATÁLOGO CIUDADANO</span><h2>Ofertas y cupones</h2><p>Las ofertas activas se publican en el catálogo de la app.</p></div><span class="cashier-offer-icon"><i data-lucide="ticket-percent"></i></span></div><form id="cashier-reward-form" class="cashier-reward-form"><label>Qué recibe la persona<input name="name" maxlength="100" required placeholder="Ej.: Café y pieza de bollería"></label><label>Coste en EcoPuntos<input name="cost" type="number" min="1" max="100000" step="1" required placeholder="Ej.: 45"></label><label>Descripción breve<textarea name="description" maxlength="280" minlength="5" required rows="3" placeholder="Indica condiciones o detalles de la oferta"></textarea></label><button class="cashier-offer-submit" type="submit"><i data-lucide="plus"></i>Publicar oferta</button><p class="cashier-offer-status" id="cashier-reward-status" role="status" aria-live="polite"></p></form><div class="cashier-offer-list" id="cashier-reward-list"><p class="cashier-empty">Cargando tus ofertas…</p></div>';
+    panel.innerHTML = '<div class="cashier-section-heading"><div><span class="eyebrow">CATÁLOGO CIUDADANO</span><h2>Ofertas y cupones</h2><p>Las ofertas activas se publican en el catálogo de la app.</p></div><span class="cashier-offer-icon"><i data-lucide="ticket-percent"></i></span></div><form id="cashier-reward-form" class="cashier-reward-form"><label>Qué recibe la persona<input name="name" maxlength="100" required placeholder="Ej.: Café y pieza de bollería"></label><label>Coste en EcoPuntos<input name="cost" type="number" min="1" max="100000" step="1" required placeholder="Ej.: 45"></label><label>Descripción breve<textarea name="description" maxlength="280" minlength="5" required rows="3" placeholder="Indica condiciones o detalles de la oferta"></textarea></label><label class="cashier-student-featured"><input name="student_featured" type="checkbox"><span>Mostrar en el apartado para estudiantes<small>Solo hará que aparezca en ese apartado; no limita quién puede verla o canjearla.</small></span></label><button class="cashier-offer-submit" type="submit"><i data-lucide="plus"></i>Publicar oferta</button><p class="cashier-offer-status" id="cashier-reward-status" role="status" aria-live="polite"></p></form><div class="cashier-offer-list" id="cashier-reward-list"><p class="cashier-empty">Cargando tus ofertas…</p></div>';
     root.querySelector('.cashier-scanner-panel')?.after(panel);
     window.lucide?.createIcons();
 
@@ -997,7 +997,7 @@
       try {
         const result = await requestWithToken('/cashier/rewards', {}, cashierToken);
         list.innerHTML = result.items.length
-          ? result.items.map(item => `<article class="cashier-offer-row"><div><b>${escapeHtml(item.name)}</b><p>${escapeHtml(item.description)}</p><small>${escapeHtml(item.cost)} EcoPuntos · ${item.active ? 'Publicada' : 'Pausada'}</small></div><button type="button" class="cashier-offer-toggle" data-reward-id="${escapeHtml(item.id)}" data-active="${item.active}" aria-label="${item.active ? 'Pausar' : 'Publicar'} ${escapeHtml(item.name)}">${item.active ? 'Pausar' : 'Publicar'}</button></article>`).join('')
+          ? result.items.map(item => `<article class="cashier-offer-row"><div><b>${escapeHtml(item.name)}</b><p>${escapeHtml(item.description)}</p><small>${escapeHtml(item.cost)} EcoPuntos · ${item.active ? 'Publicada' : 'Pausada'}${item.student_featured ? ' · Apartado para estudiantes' : ''}</small></div><button type="button" class="cashier-offer-toggle" data-reward-id="${escapeHtml(item.id)}" data-active="${item.active}" aria-label="${item.active ? 'Pausar' : 'Publicar'} ${escapeHtml(item.name)}">${item.active ? 'Pausar' : 'Publicar'}</button></article>`).join('')
           : '<p class="cashier-empty">Aún no has publicado ofertas.</p>';
         list.querySelectorAll('.cashier-offer-toggle').forEach(button => {
           button.addEventListener('click', async () => {
@@ -1033,7 +1033,8 @@
           body: JSON.stringify({
             name: String(values.get('name')).trim(),
             cost: Number(values.get('cost')),
-            description: String(values.get('description')).trim()
+            description: String(values.get('description')).trim(),
+            student_featured: values.get('student_featured') === 'on'
           })
         }, cashierToken);
         form.reset();

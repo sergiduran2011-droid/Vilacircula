@@ -171,6 +171,7 @@ class MerchantRewardCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     cost: int = Field(ge=1, le=100_000)
     description: str = Field(min_length=5, max_length=280)
+    student_featured: bool = False
 
 
 class MerchantRewardStatus(BaseModel):
@@ -263,6 +264,7 @@ CREATE TABLE IF NOT EXISTS merchant_rewards (
     cost INTEGER NOT NULL CHECK (cost > 0),
     description TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    student_featured INTEGER NOT NULL DEFAULT 0 CHECK (student_featured IN (0, 1)),
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS merchant_rewards_catalog_idx ON merchant_rewards(active, merchant_id, created_at DESC);
@@ -523,10 +525,12 @@ def create_app(
             connection.execute("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS merchant_id TEXT REFERENCES merchants(id)")
             connection.execute("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS redeemed_by TEXT REFERENCES cashier_users(id)")
             connection.execute("ALTER TABLE eco_id_tokens ADD COLUMN IF NOT EXISTS eco_purchase INTEGER NOT NULL DEFAULT 0")
+            connection.execute("ALTER TABLE merchant_rewards ADD COLUMN IF NOT EXISTS student_featured INTEGER NOT NULL DEFAULT 0")
         else:
             profile_columns = {row["name"] for row in connection.execute("PRAGMA table_info(profiles)")}
             coupon_columns = {row["name"] for row in connection.execute("PRAGMA table_info(coupons)")}
             eco_id_columns = {row["name"] for row in connection.execute("PRAGMA table_info(eco_id_tokens)")}
+            merchant_reward_columns = {row["name"] for row in connection.execute("PRAGMA table_info(merchant_rewards)")}
         if not is_postgres_url(config.database_url) and "google_sub" not in profile_columns:
             connection.execute("ALTER TABLE profiles ADD COLUMN google_sub TEXT")
         if not is_postgres_url(config.database_url) and "username" not in profile_columns:
@@ -547,6 +551,8 @@ def create_app(
             connection.execute("ALTER TABLE coupons ADD COLUMN redeemed_by TEXT REFERENCES cashier_users(id)")
         if not is_postgres_url(config.database_url) and "eco_purchase" not in eco_id_columns:
             connection.execute("ALTER TABLE eco_id_tokens ADD COLUMN eco_purchase INTEGER NOT NULL DEFAULT 0 CHECK (eco_purchase IN (0, 1))")
+        if not is_postgres_url(config.database_url) and "student_featured" not in merchant_reward_columns:
+            connection.execute("ALTER TABLE merchant_rewards ADD COLUMN student_featured INTEGER NOT NULL DEFAULT 0 CHECK (student_featured IN (0, 1))")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS profiles_username_idx ON profiles(username) WHERE username IS NOT NULL")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS profiles_google_sub_idx ON profiles(google_sub) WHERE google_sub IS NOT NULL")
         legacy_profiles = connection.execute("SELECT id, display_name, token_hash, username, password_hash FROM profiles").fetchall()
@@ -596,7 +602,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Admin-Key", "X-Requested-With"],
     )
 
@@ -1442,6 +1448,7 @@ def create_app(
                 "icon": "gift",
                 "description": row["description"],
                 "is_demo": bool(row["is_demo"]),
+                "student_featured": bool(row["student_featured"]),
             }
             for row in merchant_rewards
         ]
@@ -1453,11 +1460,20 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cambia la contraseña inicial antes de gestionar ofertas.")
         with closing(connect()) as connection:
             rows = connection.execute(
-                "SELECT id, name, cost, description, active, created_at "
+                "SELECT id, name, cost, description, active, student_featured, created_at "
                 "FROM merchant_rewards WHERE merchant_id = ? ORDER BY created_at DESC",
                 (cashier["merchant_id"],),
             ).fetchall()
-        return {"items": [{**dict(row), "active": bool(row["active"])} for row in rows]}
+        return {
+            "items": [
+                {
+                    **dict(row),
+                    "active": bool(row["active"]),
+                    "student_featured": bool(row["student_featured"]),
+                }
+                for row in rows
+            ]
+        }
 
     @app.post("/api/v1/cashier/rewards", status_code=status.HTTP_201_CREATED)
     def create_cashier_reward(
@@ -1476,12 +1492,12 @@ def create_app(
         created_at = timestamp()
         with closing(connect()) as connection:
             connection.execute(
-                "INSERT INTO merchant_rewards (id, merchant_id, name, cost, description, active, created_at) "
-                "VALUES (?, ?, ?, ?, ?, 1, ?)",
-                (reward_id, cashier["merchant_id"], name, payload.cost, description, created_at),
+                "INSERT INTO merchant_rewards (id, merchant_id, name, cost, description, active, student_featured, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+                (reward_id, cashier["merchant_id"], name, payload.cost, description, int(payload.student_featured), created_at),
             )
             row = connection.execute(
-                "SELECT id, name, cost, description, active, created_at FROM merchant_rewards WHERE id = ?",
+                "SELECT id, name, cost, description, active, student_featured, created_at FROM merchant_rewards WHERE id = ?",
                 (reward_id,),
             ).fetchone()
         add_audit_event(
@@ -1491,9 +1507,17 @@ def create_app(
             target_type="merchant_reward",
             target_id=reward_id,
             message="Oferta publicada en el catálogo",
-            metadata={"merchant_id": cashier["merchant_id"], "cost": payload.cost},
+            metadata={
+                "merchant_id": cashier["merchant_id"],
+                "cost": payload.cost,
+                "student_featured": payload.student_featured,
+            },
         )
-        return {**dict(row), "active": bool(row["active"])}
+        return {
+            **dict(row),
+            "active": bool(row["active"]),
+            "student_featured": bool(row["student_featured"]),
+        }
 
     @app.patch("/api/v1/cashier/rewards/{reward_id}")
     def update_cashier_reward(
@@ -1511,7 +1535,7 @@ def create_app(
             if updated.rowcount != 1:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oferta no encontrada en tu comercio.")
             row = connection.execute(
-                "SELECT id, name, cost, description, active, created_at FROM merchant_rewards WHERE id = ?",
+                "SELECT id, name, cost, description, active, student_featured, created_at FROM merchant_rewards WHERE id = ?",
                 (reward_id,),
             ).fetchone()
         add_audit_event(
@@ -1523,7 +1547,11 @@ def create_app(
             message="Estado de oferta actualizado",
             metadata={"merchant_id": cashier["merchant_id"], "active": payload.active},
         )
-        return {**dict(row), "active": bool(row["active"])}
+        return {
+            **dict(row),
+            "active": bool(row["active"]),
+            "student_featured": bool(row["student_featured"]),
+        }
 
     @app.get("/api/v1/coupons")
     def coupons(profile: sqlite3.Row = Depends(current_profile)) -> dict[str, object]:

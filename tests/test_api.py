@@ -75,6 +75,23 @@ def test_serves_pwa_assets(tmp_path):
     assert all(icon.status_code == 200 for icon in icons)
 
 
+def test_cashier_reward_patch_is_allowed_by_cors(tmp_path):
+    with make_client(tmp_path) as client:
+        origin = client.app.state.allowed_origins[0]
+        response = client.options(
+            "/api/v1/cashier/rewards/reward-id",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "PATCH",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert "PATCH" in response.headers["access-control-allow-methods"]
+
+
 def test_profile_has_no_email_and_is_stored_in_sqlite(tmp_path):
     with make_client(tmp_path) as client:
         profile, headers = create_profile(client)
@@ -481,6 +498,15 @@ def test_cashier_is_scoped_to_merchant_and_initial_password_must_change(tmp_path
 def test_cashier_publishes_scoped_reward_and_existing_coupon_survives_deactivation(tmp_path):
     with make_client(tmp_path) as client:
         _, citizen_headers = create_profile(client)
+        adult_registration = client.post(
+            "/api/v1/auth/google",
+            json={
+                "credential": "google:adult-reward-user",
+                "display_name": "Persona adulta",
+                "birth_date": "1990-01-01",
+            },
+        )
+        adult_headers = {"Authorization": f"Bearer {adult_registration.json()['token']}"}
         cashier_login = client.post(
             "/api/v1/auth/cashier/login",
             json={"username": "caja.cafe-marco", "password": "Viladecans"},
@@ -501,7 +527,12 @@ def test_cashier_publishes_scoped_reward_and_existing_coupon_survives_deactivati
 
         created = client.post(
             "/api/v1/cashier/rewards",
-            json={"name": "Café y tostada", "cost": 45, "description": "Desayuno en el local."},
+            json={
+                "name": "Café y tostada",
+                "cost": 45,
+                "description": "Desayuno en el local.",
+                "student_featured": True,
+            },
             headers=cashier_headers,
         )
         reward = created.json()
@@ -511,6 +542,11 @@ def test_cashier_publishes_scoped_reward_and_existing_coupon_survives_deactivati
             "/api/v1/coupons",
             json={"reward_id": reward["id"]},
             headers=citizen_headers,
+        )
+        adult_coupon = client.post(
+            "/api/v1/coupons",
+            json={"reward_id": reward["id"]},
+            headers=adult_headers,
         )
 
         other_login = client.post(
@@ -553,9 +589,13 @@ def test_cashier_publishes_scoped_reward_and_existing_coupon_survives_deactivati
     assert changed.status_code == 200
     assert created.status_code == 201
     assert reward["active"] is True
+    assert reward["student_featured"] is True
     assert own_offers.json()["items"] == [{**reward}]
-    assert any(item["id"] == reward["id"] for item in catalog)
+    assert any(item["id"] == reward["id"] and item["student_featured"] is True for item in catalog)
     assert citizen_coupon.status_code == 201
+    assert adult_registration.status_code == 200
+    assert adult_registration.json()["profile"]["role"] == "user"
+    assert adult_coupon.status_code == 201
     assert other_login.status_code == 200
     assert other_changed.status_code == 200
     assert other_offers.json()["items"] == []
@@ -566,6 +606,31 @@ def test_cashier_publishes_scoped_reward_and_existing_coupon_survives_deactivati
     assert paused_offer_cannot_be_redeemed.status_code == 404
     assert redeemed.status_code == 200
     assert redeemed.json()["status"] == "redeemed"
+
+
+def test_existing_merchant_rewards_migrate_student_featured_default(tmp_path):
+    database_path = tmp_path / "legacy-rewards.sqlite3"
+    with make_client(tmp_path, database_path=database_path):
+        pass
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("ALTER TABLE merchant_rewards DROP COLUMN student_featured")
+        connection.execute(
+            "INSERT INTO merchant_rewards (id, merchant_id, name, cost, description, active, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("legacy-offer", "osm-12752947043", "Oferta anterior", 20, "Oferta ya existente.", 1, "2024-01-01"),
+        )
+
+    with make_client(tmp_path, database_path=database_path):
+        pass
+
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            "SELECT student_featured FROM merchant_rewards WHERE id = ?",
+            ("legacy-offer",),
+        ).fetchone()
+
+    assert row == (0,)
 
 
 def test_cashier_reward_validates_fields_and_insufficient_balance(tmp_path):
