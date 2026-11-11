@@ -65,8 +65,7 @@ def test_serves_pwa_assets(tmp_path):
     assert "cashier-reward-form" in cashier_rewards.text
     assert service_worker.status_code == 200
     assert service_worker.headers["service-worker-allowed"] == "/"
-    assert "event.request.mode === 'navigate'" in service_worker.text
-    assert "cache: 'no-cache'" in service_worker.text
+    assert "fetch(event.request, { cache: 'no-cache' })" in service_worker.text
     assert manifest.status_code == 200
     assert {icon["src"] for icon in manifest.json()["icons"]} == {
         "icons/boot-print-192.png",
