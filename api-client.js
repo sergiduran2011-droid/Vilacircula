@@ -980,7 +980,7 @@
     if (!document.querySelector('link[data-cashier-rewards-styles]')) {
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
-      stylesheet.href = './cashier-rewards.css?v=3';
+      stylesheet.href = './cashier-rewards.css?v=4';
       stylesheet.dataset.cashierRewardsStyles = '';
       document.head.append(stylesheet);
     }
@@ -997,8 +997,28 @@
       try {
         const result = await requestWithToken('/cashier/rewards', {}, cashierToken);
         list.innerHTML = result.items.length
-          ? result.items.map(item => `<article class="cashier-offer-row"><div><b>${escapeHtml(item.name)}</b><p>${escapeHtml(item.description)}</p><small>${escapeHtml(item.cost)} EcoPuntos · ${item.active ? 'Publicada' : 'Pausada'}${item.student_featured ? ' · Apartado para estudiantes' : ''}</small></div><button type="button" class="cashier-offer-toggle" data-reward-id="${escapeHtml(item.id)}" data-active="${item.active}" aria-label="${item.active ? 'Pausar' : 'Publicar'} ${escapeHtml(item.name)}">${item.active ? 'Pausar' : 'Publicar'}</button></article>`).join('')
+          ? result.items.map(item => `<article class="cashier-offer-row"><div class="cashier-offer-copy"><b>${escapeHtml(item.name)}</b><p>${escapeHtml(item.description)}</p><small>${escapeHtml(item.cost)} EcoPuntos · ${item.active ? 'Publicada' : 'Pausada'}</small></div><label class="cashier-offer-featured"><input type="checkbox" data-reward-featured="${escapeHtml(item.id)}" ${item.student_featured ? 'checked' : ''}><span>Destacar para estudiantes</span></label><button type="button" class="cashier-offer-toggle" data-reward-id="${escapeHtml(item.id)}" data-active="${item.active}" aria-label="${item.active ? 'Pausar' : 'Publicar'} ${escapeHtml(item.name)}">${item.active ? 'Pausar' : 'Publicar'}</button></article>`).join('')
           : '<p class="cashier-empty">Aún no has publicado ofertas.</p>';
+        list.querySelectorAll('[data-reward-featured]').forEach(checkbox => {
+          checkbox.addEventListener('change', async () => {
+            checkbox.disabled = true;
+            status.textContent = '';
+            try {
+              await requestWithToken(`/cashier/rewards/${encodeURIComponent(checkbox.dataset.rewardFeatured)}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ student_featured: checkbox.checked })
+              }, cashierToken);
+              status.textContent = checkbox.checked
+                ? 'Oferta destacada para estudiantes. Sigue disponible para todos.'
+                : 'La oferta ya no aparece destacada para estudiantes.';
+              await loadOffers();
+            } catch (error) {
+              checkbox.checked = !checkbox.checked;
+              checkbox.disabled = false;
+              status.textContent = getApiErrorMessage(error);
+            }
+          });
+        });
         list.querySelectorAll('.cashier-offer-toggle').forEach(button => {
           button.addEventListener('click', async () => {
             button.disabled = true;

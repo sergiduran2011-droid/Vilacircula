@@ -531,11 +531,15 @@ def test_cashier_publishes_scoped_reward_and_existing_coupon_survives_deactivati
                 "name": "Café y tostada",
                 "cost": 45,
                 "description": "Desayuno en el local.",
-                "student_featured": True,
             },
             headers=cashier_headers,
         )
         reward = created.json()
+        featured = client.patch(
+            f"/api/v1/cashier/rewards/{reward['id']}",
+            json={"student_featured": True},
+            headers=cashier_headers,
+        )
         own_offers = client.get("/api/v1/cashier/rewards", headers=cashier_headers)
         catalog = client.get("/api/v1/rewards").json()["items"]
         citizen_coupon = client.post(
@@ -589,8 +593,11 @@ def test_cashier_publishes_scoped_reward_and_existing_coupon_survives_deactivati
     assert changed.status_code == 200
     assert created.status_code == 201
     assert reward["active"] is True
-    assert reward["student_featured"] is True
-    assert own_offers.json()["items"] == [{**reward}]
+    assert reward["student_featured"] is False
+    assert featured.status_code == 200
+    assert featured.json()["student_featured"] is True
+    assert featured.json()["active"] is True
+    assert own_offers.json()["items"][0]["student_featured"] is True
     assert any(item["id"] == reward["id"] and item["student_featured"] is True for item in catalog)
     assert citizen_coupon.status_code == 201
     assert adult_registration.status_code == 200

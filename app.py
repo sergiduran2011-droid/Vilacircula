@@ -175,7 +175,8 @@ class MerchantRewardCreate(BaseModel):
 
 
 class MerchantRewardStatus(BaseModel):
-    active: bool
+    active: bool | None = None
+    student_featured: bool | None = None
 
 
 CASHIER_SEEDS = (
@@ -1527,10 +1528,19 @@ def create_app(
     ) -> dict[str, object]:
         if cashier["must_change_password"]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cambia la contraseña inicial antes de gestionar ofertas.")
+        if payload.active is None and payload.student_featured is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Indica si quieres publicar, pausar o destacar la oferta.")
         with closing(connect()) as connection:
             updated = connection.execute(
-                "UPDATE merchant_rewards SET active = ? WHERE id = ? AND merchant_id = ?",
-                (int(payload.active), reward_id, cashier["merchant_id"]),
+                "UPDATE merchant_rewards SET active = COALESCE(?, active), "
+                "student_featured = COALESCE(?, student_featured) "
+                "WHERE id = ? AND merchant_id = ?",
+                (
+                    int(payload.active) if payload.active is not None else None,
+                    int(payload.student_featured) if payload.student_featured is not None else None,
+                    reward_id,
+                    cashier["merchant_id"],
+                ),
             )
             if updated.rowcount != 1:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oferta no encontrada en tu comercio.")
@@ -1544,8 +1554,12 @@ def create_app(
             actor_id=cashier["id"],
             target_type="merchant_reward",
             target_id=reward_id,
-            message="Estado de oferta actualizado",
-            metadata={"merchant_id": cashier["merchant_id"], "active": payload.active},
+            message="Oferta actualizada",
+            metadata={
+                "merchant_id": cashier["merchant_id"],
+                "active": payload.active,
+                "student_featured": payload.student_featured,
+            },
         )
         return {
             **dict(row),

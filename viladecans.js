@@ -456,9 +456,12 @@
     const otherOffers = prizes.filter(prize => !prize.student_featured);
     const isStudent = document.body.dataset.role === 'student';
     const isCatalan = window.vilaLocale?.().startsWith('ca');
-    catalog.classList.toggle('has-student-groups', isStudent && studentOffers.length > 0);
-    if (isStudent && studentOffers.length > 0) {
-      catalog.innerHTML = `<section class="reward-group"><div class="section-head reward-group-heading"><h2>${isCatalan ? 'Per a estudiants' : 'Para estudiantes'}</h2><span class="eyebrow">${isCatalan ? 'OFERTES DESTACADES' : 'OFERTAS DESTACADAS'}</span></div><div class="rewards reward-group-grid">${renderCards(studentOffers)}</div></section>${otherOffers.length ? `<section class="reward-group"><div class="section-head reward-group-heading"><h2>${isCatalan ? 'Altres ofertes' : 'Otras ofertas'}</h2></div><div class="rewards reward-group-grid">${renderCards(otherOffers)}</div></section>` : ''}`;
+    catalog.classList.toggle('has-student-groups', isStudent);
+    if (isStudent) {
+      const emptyFeatured = isCatalan
+        ? 'Encara no hi ha ofertes destacades. Consulta les altres ofertes disponibles.'
+        : 'Aún no hay ofertas destacadas. Consulta las demás ofertas disponibles.';
+      catalog.innerHTML = `<section class="reward-group"><div class="section-head reward-group-heading"><h2>${isCatalan ? 'Per a estudiants' : 'Para estudiantes'}</h2><span class="eyebrow">${isCatalan ? 'OFERTES DESTACADES' : 'OFERTAS DESTACADAS'}</span></div><div class="rewards reward-group-grid">${studentOffers.length ? renderCards(studentOffers) : `<p class="student-offers-empty">${emptyFeatured}</p>`}</div></section>${otherOffers.length ? `<section class="reward-group"><div class="section-head reward-group-heading"><h2>${isCatalan ? 'Altres ofertes' : 'Otras ofertas'}</h2></div><div class="rewards reward-group-grid">${renderCards(otherOffers)}</div></section>` : ''}`;
     } else {
       catalog.innerHTML = renderCards(prizes);
     }

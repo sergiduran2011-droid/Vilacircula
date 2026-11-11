@@ -23,6 +23,11 @@
 .cashier-offer-list{margin-top:7px}
 .cashier-offer-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 0;border-top:1px solid #edf0e9}
 .cashier-offer-row>div{min-width:0}
+.cashier-offer-row .cashier-offer-copy{flex:1}
+.cashier-offer-featured{display:flex;align-items:center;gap:6px;flex:0 0 auto;color:#405d36;font-size:9px;font-weight:700}
+.cashier-offer-featured input{width:15px;height:15px;margin:0;accent-color:#416943}
+.cashier-offer-featured input:focus-visible{outline:2px solid #5d80d0;outline-offset:2px}
+.cashier-offer-featured input:disabled{opacity:.6;cursor:wait}
 .cashier-offer-row b{display:block;color:#193e30;font-size:11px}
 .cashier-offer-row p{margin:4px 0;color:#687466;font-size:10px;line-height:1.45;overflow-wrap:anywhere}
 .cashier-offer-row small{color:#788179;font-size:9px}
