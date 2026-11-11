@@ -56,6 +56,7 @@ def test_serves_pwa_assets(tmp_path):
         cashier_rewards = client.get("/cashier-rewards.css")
         service_worker = client.get("/sw.js")
         manifest = client.get("/manifest.json")
+        app_page = client.get("/")
         icons = [client.get(f"/{icon['src']}") for icon in manifest.json()["icons"]]
 
     assert features.status_code == 200
@@ -65,6 +66,12 @@ def test_serves_pwa_assets(tmp_path):
     assert service_worker.status_code == 200
     assert service_worker.headers["service-worker-allowed"] == "/"
     assert manifest.status_code == 200
+    assert {icon["src"] for icon in manifest.json()["icons"]} == {
+        "icons/boot-print-192.png",
+        "icons/boot-print-512.png",
+        "icons/boot-print-maskable-512.png",
+    }
+    assert 'href="icons/boot-print-192.png"' in app_page.text
     assert all(icon.status_code == 200 for icon in icons)
 
 
