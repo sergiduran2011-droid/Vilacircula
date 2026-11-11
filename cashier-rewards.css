@@ -1,6 +1,9 @@
 .cashier-rewards-panel{padding:20px;border:1px solid #e4e9df;border-radius:11px;background:#fff}
 .cashier-rewards-panel .cashier-section-heading p{margin:5px 0 0;color:#778275;font-size:10px;line-height:1.5}
 .cashier-rewards-panel .eyebrow{color:#778275}
+.cashier-add-reward{min-height:38px;padding:0 12px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:8px;background:#d8f16c;color:#193e30;font-size:10px;font-weight:800;white-space:nowrap}
+.cashier-add-reward i{width:15px;height:15px}
+.cashier-add-reward:focus-visible{outline:3px solid #5d80d0;outline-offset:3px}
 .cashier-offer-icon{width:38px;height:38px;display:grid;place-items:center;flex:0 0 38px;border-radius:9px;background:#edf3e5;color:#63854c}
 .cashier-offer-icon i{width:19px;height:19px}
 .cashier-reward-form{display:grid;grid-template-columns:1fr 170px;gap:12px;margin-top:18px}
@@ -20,4 +23,4 @@
 .cashier-offer-row p{margin:4px 0;color:#687466;font-size:10px;line-height:1.45;overflow-wrap:anywhere}
 .cashier-offer-row small{color:#788179;font-size:9px}
 .cashier-offer-toggle{min-height:32px;flex:0 0 auto;padding:0 10px;border:1px solid #dce5d8;border-radius:7px;background:#f7f9f4;color:#405d36;font-size:9px;font-weight:800}
-@media(max-width:560px){.cashier-rewards-panel{padding:16px}.cashier-reward-form{grid-template-columns:1fr}.cashier-reward-form label:first-child,.cashier-reward-form label:nth-child(3){grid-column:auto}.cashier-offer-submit,.cashier-offer-status{grid-column:auto}.cashier-offer-row{align-items:flex-start}}
+@media(max-width:560px){.cashier-rewards-panel{padding:16px}.cashier-reward-form{grid-template-columns:1fr}.cashier-reward-form label:first-child,.cashier-reward-form label:nth-child(3){grid-column:auto}.cashier-offer-submit,.cashier-offer-status{grid-column:auto}.cashier-offer-row{align-items:flex-start}.cashier-add-reward{min-height:36px;padding:0 9px;font-size:9px}}
