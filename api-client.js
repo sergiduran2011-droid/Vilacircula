@@ -973,7 +973,7 @@
     if (!document.querySelector('link[data-cashier-rewards-styles]')) {
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
-      stylesheet.href = './cashier-rewards.css?v=1';
+      stylesheet.href = './cashier-rewards.css?v=2';
       stylesheet.dataset.cashierRewardsStyles = '';
       document.head.append(stylesheet);
     }
