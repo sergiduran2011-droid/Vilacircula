@@ -868,7 +868,7 @@
             if (!code) statusNode.textContent = 'El QR no es un cupón ni un EcoID VilaCircula.';
             else {
               const result = await requestWithToken('/cashier/coupons/redeem', { method: 'POST', body: JSON.stringify({ code }) }, cashierToken);
-              await showCashierSuccess(root, { title: 'Cupón canjeado', description: `${result.coupon.name} · ${result.merchant}`, kind: 'coupon' }, cashierToken);
+              await showCashierSuccess(root, { title: 'Cupón canjeado', description: `${escapeHtml(result.coupon.name)} · ${escapeHtml(result.merchant)}`, kind: 'coupon' }, cashierToken);
               return;
             }
           }
@@ -929,7 +929,8 @@
       ...(dashboard.recent_coupons || []).map(item => ({ ...item, kind: 'coupon', title: item.status === 'success' ? 'Cupón canjeado' : 'Intento de canje', detail: item.code })),
       ...(dashboard.recent_ecoids || []).map(item => ({ ...item, kind: 'ecoid', title: 'EcoID validado', detail: '+10 EcoPuntos' }))
     ].sort((first, second) => second.validated_at || second.created_at ? Date.parse(second.validated_at || second.created_at) - Date.parse(first.validated_at || first.created_at) : 0).slice(0, 8);
-    root.innerHTML = `<header class="cashier-topbar"><a class="cashier-brand"><span class="cashier-brand-mark"><i data-lucide="leaf"></i></span><span><b>VilaCircula</b><small>Terminal de comercio</small></span></a><div class="cashier-top-actions"><span class="cashier-merchant"><i data-lucide="store"></i>${dashboard.merchant || 'Comercio'}</span><button class="icon-button" id="cashier-change-password" aria-label="Cambiar contraseña" title="Cambiar contraseña"><i data-lucide="key-round"></i></button><button class="icon-button" id="cashier-exit" aria-label="Salir de caja" title="Salir de caja"><i data-lucide="log-out"></i></button></div></header><main class="cashier-main"><section class="cashier-welcome"><div><span class="eyebrow">PANEL DE CAJA</span><h1>Hola, ${cashierName || 'equipo'}.</h1><p>Actividad y herramientas de ${dashboard.merchant || 'tu comercio'}.</p></div><span class="cashier-live"><i></i> CONECTADO</span></section>${dashboard.is_demo ? '<p class="cashier-demo-note">Entorno de demostración</p>' : ''}<section class="cashier-metrics" aria-label="Resumen de hoy"><article class="cashier-metric"><span><i data-lucide="ticket-check"></i>Cupones canjeados</span><strong>${today.successful_coupons || 0}</strong><small>hoy · ${week.successful_coupons || 0} esta semana</small></article><article class="cashier-metric cashier-metric-points"><span><i data-lucide="scan-line"></i>EcoID validados</span><strong>${today.ecoid_scans || 0}</strong><small>hoy · ${week.ecoid_scans || 0} esta semana</small></article><article class="cashier-metric"><span><i data-lucide="activity"></i>Actividad total</span><strong>${(today.successful_coupons || 0) + (today.ecoid_scans || 0)}</strong><small>operaciones completadas hoy</small></article><article class="cashier-metric cashier-metric-alert"><span><i data-lucide="triangle-alert"></i>Incidencias</span><strong>${today.failed_coupons || 0}</strong><small>cupones rechazados hoy</small></article></section><section class="cashier-columns"><div class="cashier-main-column"><section class="cashier-scanner-panel"><div class="cashier-section-heading"><div><span class="eyebrow">VALIDACIÓN SEGURA</span><h2>Escanear cliente</h2><p>Lee un cupón para canjearlo o un EcoID para sumar puntos.</p></div><span class="cashier-scan-icon"><i data-lucide="scan-qr-code"></i></span></div><div class="cashier-scanner-preview" id="cashier-preview" hidden><video id="cashier-video" playsinline muted></video><span class="cashier-scan-frame"></span></div><div class="cashier-feedback ${feedback ? 'is-success' : ''}" id="cashier-feedback" role="status" aria-live="polite">${feedback ? `<i data-lucide="circle-check"></i><span><b>${feedback.title}</b><small>${feedback.description}</small></span>` : '<i data-lucide="scan-line"></i><span><b>Listo para escanear</b><small>El QR se valida con el servidor y solo puede usarse una vez.</small></span>'}</div><p class="cashier-scan-status" id="cashier-status">Cámara apagada. Pulsa para iniciar.</p>${dashboard.is_demo ? '' : '<label class="cashier-eco-purchase"><input id="cashier-eco-purchase" type="checkbox"><span>Compra ECO confirmada por el comercio</span></label>'}<div class="cashier-scan-actions"><button class="primary" id="cashier-start-scan"><i data-lucide="camera"></i>Escanear QR</button><button class="cashier-secondary" id="cashier-next-scan" ${feedback ? '' : 'hidden'}><i data-lucide="scan-line"></i>Escanear siguiente</button></div><div class="cashier-manual-entry"><label for="manual-coupon-code">Código manual</label><div class="row"><input id="manual-coupon-code" type="text" autocomplete="off" placeholder="VC-... o VCID-..." maxlength="40" /><button class="primary" type="button" id="manual-coupon-submit">Validar</button></div></div></section><section class="cashier-activity-panel"><div class="cashier-section-heading"><div><span class="eyebrow">REGISTRO DEL COMERCIO</span><h2>Actividad reciente</h2></div><button class="cashier-refresh" id="cashier-refresh" aria-label="Actualizar actividad" title="Actualizar"><i data-lucide="refresh-cw"></i></button></div>${activities.length ? `<div class="cashier-activity-list">${activities.map(item => `<article class="cashier-activity-row"><span class="cashier-activity-icon ${item.kind}"><i data-lucide="${item.kind === 'ecoid' ? 'scan-line' : item.status === 'success' ? 'ticket-check' : 'circle-alert'}"></i></span><span><b>${item.title}</b><small>${item.detail}</small></span><time>${new Date(item.validated_at || item.created_at).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</time></article>`).join('')}</div>` : '<p class="cashier-empty">Aún no hay operaciones registradas.</p>'}</section></div><aside class="cashier-side-column"><section class="cashier-chart-panel"><div class="cashier-section-heading"><div><span class="eyebrow">ÚLTIMOS 7 DÍAS</span><h2>Ritmo del comercio</h2></div></div><div class="cashier-chart-legend"><span><i class="coupon-key"></i>Cupones</span><span><i class="ecoid-key"></i>EcoID</span></div><div class="cashier-chart" role="img" aria-label="Operaciones diarias por tipo">${cashierChart(dashboard.activity_by_day || [])}</div><div class="cashier-chart-caption">Cada barra representa operaciones validadas en el día.</div></section><section class="cashier-tip"><span class="cashier-tip-icon"><i data-lucide="shield-check"></i></span><div><b>Validación protegida</b><p>Los cupones y EcoID caducan o se consumen al validarse. Los puntos se asignan desde el servidor a la cuenta correcta.</p></div></section></aside></section></main>`;
+    const merchantLabel = escapeHtml(dashboard.merchant || 'Comercio');
+    root.innerHTML = `<header class="cashier-topbar"><a class="cashier-brand"><span class="cashier-brand-mark"><i data-lucide="leaf"></i></span><span><b>VilaCircula</b><small>Terminal de comercio</small></span></a><div class="cashier-top-actions"><span class="cashier-merchant"><i data-lucide="store"></i>${merchantLabel}</span><button class="icon-button" id="cashier-change-password" aria-label="Cambiar contraseña" title="Cambiar contraseña"><i data-lucide="key-round"></i></button><button class="icon-button" id="cashier-exit" aria-label="Salir de caja" title="Salir de caja"><i data-lucide="log-out"></i></button></div></header><main class="cashier-main"><section class="cashier-welcome"><div><span class="eyebrow">PANEL DE CAJA</span><h1>Hola, ${cashierName || 'equipo'}.</h1><p>Actividad y herramientas de ${merchantLabel}.</p></div><span class="cashier-live"><i></i> CONECTADO</span></section>${dashboard.is_demo ? '<p class="cashier-demo-note">Entorno de demostración</p>' : ''}<section class="cashier-metrics" aria-label="Resumen de hoy"><article class="cashier-metric"><span><i data-lucide="ticket-check"></i>Cupones canjeados</span><strong>${today.successful_coupons || 0}</strong><small>hoy · ${week.successful_coupons || 0} esta semana</small></article><article class="cashier-metric cashier-metric-points"><span><i data-lucide="scan-line"></i>EcoID validados</span><strong>${today.ecoid_scans || 0}</strong><small>hoy · ${week.ecoid_scans || 0} esta semana</small></article><article class="cashier-metric"><span><i data-lucide="activity"></i>Actividad total</span><strong>${(today.successful_coupons || 0) + (today.ecoid_scans || 0)}</strong><small>operaciones completadas hoy</small></article><article class="cashier-metric cashier-metric-alert"><span><i data-lucide="triangle-alert"></i>Incidencias</span><strong>${today.failed_coupons || 0}</strong><small>cupones rechazados hoy</small></article></section><section class="cashier-columns"><div class="cashier-main-column"><section class="cashier-scanner-panel"><div class="cashier-section-heading"><div><span class="eyebrow">VALIDACIÓN SEGURA</span><h2>Escanear cliente</h2><p>Lee un cupón para canjearlo o un EcoID para sumar puntos.</p></div><span class="cashier-scan-icon"><i data-lucide="scan-qr-code"></i></span></div><div class="cashier-scanner-preview" id="cashier-preview" hidden><video id="cashier-video" playsinline muted></video><span class="cashier-scan-frame"></span></div><div class="cashier-feedback ${feedback ? 'is-success' : ''}" id="cashier-feedback" role="status" aria-live="polite">${feedback ? `<i data-lucide="circle-check"></i><span><b>${feedback.title}</b><small>${feedback.description}</small></span>` : '<i data-lucide="scan-line"></i><span><b>Listo para escanear</b><small>El QR se valida con el servidor y solo puede usarse una vez.</small></span>'}</div><p class="cashier-scan-status" id="cashier-status">Cámara apagada. Pulsa para iniciar.</p>${dashboard.is_demo ? '' : '<label class="cashier-eco-purchase"><input id="cashier-eco-purchase" type="checkbox"><span>Compra ECO confirmada por el comercio</span></label>'}<div class="cashier-scan-actions"><button class="primary" id="cashier-start-scan"><i data-lucide="camera"></i>Escanear QR</button><button class="cashier-secondary" id="cashier-next-scan" ${feedback ? '' : 'hidden'}><i data-lucide="scan-line"></i>Escanear siguiente</button></div><div class="cashier-manual-entry"><label for="manual-coupon-code">Código manual</label><div class="row"><input id="manual-coupon-code" type="text" autocomplete="off" placeholder="VC-... o VCID-..." maxlength="40" /><button class="primary" type="button" id="manual-coupon-submit">Validar</button></div></div></section><section class="cashier-activity-panel"><div class="cashier-section-heading"><div><span class="eyebrow">REGISTRO DEL COMERCIO</span><h2>Actividad reciente</h2></div><button class="cashier-refresh" id="cashier-refresh" aria-label="Actualizar actividad" title="Actualizar"><i data-lucide="refresh-cw"></i></button></div>${activities.length ? `<div class="cashier-activity-list">${activities.map(item => `<article class="cashier-activity-row"><span class="cashier-activity-icon ${item.kind}"><i data-lucide="${item.kind === 'ecoid' ? 'scan-line' : item.status === 'success' ? 'ticket-check' : 'circle-alert'}"></i></span><span><b>${item.title}</b><small>${item.detail}</small></span><time>${new Date(item.validated_at || item.created_at).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</time></article>`).join('')}</div>` : '<p class="cashier-empty">Aún no hay operaciones registradas.</p>'}</section></div><aside class="cashier-side-column"><section class="cashier-chart-panel"><div class="cashier-section-heading"><div><span class="eyebrow">ÚLTIMOS 7 DÍAS</span><h2>Ritmo del comercio</h2></div></div><div class="cashier-chart-legend"><span><i class="coupon-key"></i>Cupones</span><span><i class="ecoid-key"></i>EcoID</span></div><div class="cashier-chart" role="img" aria-label="Operaciones diarias por tipo">${cashierChart(dashboard.activity_by_day || [])}</div><div class="cashier-chart-caption">Cada barra representa operaciones validadas en el día.</div></section><section class="cashier-tip"><span class="cashier-tip-icon"><i data-lucide="shield-check"></i></span><div><b>Validación protegida</b><p>Los cupones y EcoID caducan o se consumen al validarse. Los puntos se asignan desde el servidor a la cuenta correcta.</p></div></section></aside></section></main>`;
     if (feedback) root.querySelector('#cashier-feedback')?.classList.add('is-success');
     window.lucide?.createIcons();
     root.querySelector('#cashier-start-scan').addEventListener('click', () => startCashierScanner(cashierToken, root));
@@ -949,6 +950,79 @@
     root.querySelector('#manual-coupon-code').addEventListener('keydown', event => {
       if (event.key === 'Enter') submitManualCashierCode();
     });
+    renderCashierOffers(root);
+  }
+
+  function renderCashierOffers(root) {
+    if (!document.querySelector('link[data-cashier-rewards-styles]')) {
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = './cashier-rewards.css?v=1';
+      stylesheet.dataset.cashierRewardsStyles = '';
+      document.head.append(stylesheet);
+    }
+    const panel = document.createElement('section');
+    panel.id = 'cashier-rewards-panel';
+    panel.className = 'cashier-rewards-panel';
+    panel.innerHTML = '<div class="cashier-section-heading"><div><span class="eyebrow">CATÁLOGO CIUDADANO</span><h2>Ofertas y cupones</h2><p>Las ofertas activas se publican en el catálogo de la app.</p></div><span class="cashier-offer-icon"><i data-lucide="ticket-percent"></i></span></div><form id="cashier-reward-form" class="cashier-reward-form"><label>Qué recibe la persona<input name="name" maxlength="100" required placeholder="Ej.: Café y pieza de bollería"></label><label>Coste en EcoPuntos<input name="cost" type="number" min="1" max="100000" step="1" required placeholder="Ej.: 45"></label><label>Descripción breve<textarea name="description" maxlength="280" minlength="5" required rows="3" placeholder="Indica condiciones o detalles de la oferta"></textarea></label><button class="cashier-offer-submit" type="submit"><i data-lucide="plus"></i>Publicar oferta</button><p class="cashier-offer-status" id="cashier-reward-status" role="status" aria-live="polite"></p></form><div class="cashier-offer-list" id="cashier-reward-list"><p class="cashier-empty">Cargando tus ofertas…</p></div>';
+    root.querySelector('.cashier-scanner-panel')?.after(panel);
+    window.lucide?.createIcons();
+
+    const status = panel.querySelector('#cashier-reward-status');
+    const list = panel.querySelector('#cashier-reward-list');
+    const loadOffers = async () => {
+      try {
+        const result = await requestWithToken('/cashier/rewards', {}, cashierToken);
+        list.innerHTML = result.items.length
+          ? result.items.map(item => `<article class="cashier-offer-row"><div><b>${escapeHtml(item.name)}</b><p>${escapeHtml(item.description)}</p><small>${escapeHtml(item.cost)} EcoPuntos · ${item.active ? 'Publicada' : 'Pausada'}</small></div><button type="button" class="cashier-offer-toggle" data-reward-id="${escapeHtml(item.id)}" data-active="${item.active}" aria-label="${item.active ? 'Pausar' : 'Publicar'} ${escapeHtml(item.name)}">${item.active ? 'Pausar' : 'Publicar'}</button></article>`).join('')
+          : '<p class="cashier-empty">Aún no has publicado ofertas.</p>';
+        list.querySelectorAll('.cashier-offer-toggle').forEach(button => {
+          button.addEventListener('click', async () => {
+            button.disabled = true;
+            status.textContent = '';
+            try {
+              await requestWithToken(`/cashier/rewards/${encodeURIComponent(button.dataset.rewardId)}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ active: button.dataset.active !== 'true' })
+              }, cashierToken);
+              await loadOffers();
+            } catch (error) {
+              status.textContent = getApiErrorMessage(error);
+              button.disabled = false;
+            }
+          });
+        });
+      } catch (error) {
+        list.innerHTML = `<p class="cashier-empty">${escapeHtml(getApiErrorMessage(error))}</p>`;
+      }
+    };
+
+    panel.querySelector('#cashier-reward-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const submit = form.querySelector('button[type="submit"]');
+      const values = new FormData(form);
+      submit.disabled = true;
+      status.textContent = 'Publicando oferta…';
+      try {
+        await requestWithToken('/cashier/rewards', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: String(values.get('name')).trim(),
+            cost: Number(values.get('cost')),
+            description: String(values.get('description')).trim()
+          })
+        }, cashierToken);
+        form.reset();
+        status.textContent = 'Oferta publicada y visible en el catálogo.';
+        await loadOffers();
+      } catch (error) {
+        status.textContent = getApiErrorMessage(error);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    loadOffers();
   }
 
   let cashierToken;
@@ -981,7 +1055,7 @@
         await showCashierSuccess(cashierRoot, { title: `+${result.points} EcoPuntos`, description: `${escapeHtml(result.display_name)} · ${escapeHtml(result.merchant)}`, kind: 'ecoid' }, cashierToken);
       } else {
         const result = await requestWithToken('/cashier/coupons/redeem', { method: 'POST', body: JSON.stringify({ code }) }, cashierToken);
-        await showCashierSuccess(cashierRoot, { title: 'Cupón canjeado', description: `${result.coupon.name} · ${result.merchant}`, kind: 'coupon' }, cashierToken);
+        await showCashierSuccess(cashierRoot, { title: 'Cupón canjeado', description: `${escapeHtml(result.coupon.name)} · ${escapeHtml(result.merchant)}`, kind: 'coupon' }, cashierToken);
         notifyUser('Cupón canjeado', `${result.coupon.name} se ha validado correctamente.`);
       }
     } catch (error) {

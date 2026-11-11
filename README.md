@@ -4,7 +4,7 @@ VilaCircula is a progressive web app (PWA) for a local rewards programme in Vila
 
 ## Live deployment
 
-- **Frontend:** [GitHub Pages](https://sergiduran2011-droid.github.io/Vilacircula/)
+- **PWA:** [Open VilaCircula](https://sergiduran2011-droid.github.io/Vilacircula/)
 - **API:** [Render](https://vilacircula-api.onrender.com)
 - **Database:** PostgreSQL on Supabase
 - **Health check:** [/api/v1/health](https://vilacircula-api.onrender.com/api/v1/health)
@@ -22,6 +22,7 @@ The frontend is static and does not contain database credentials. Account, coupo
 - The balance shows the fixed EcoPoint conversion of 30 points per euro.
 - An opt-in browser accelerometer estimates daily steps while VilaCircula is open; reaching 5,000 steps awards 30 EcoPunts once per day.
 - A cashier workspace with daily and weekly activity, a seven-day chart, recent validations, QR scanning, and manual code entry.
+- Cashiers can publish, pause, and reactivate their own offers with a benefit, EcoPunts cost, and short description; active offers appear in the resident catalog.
 - A resident wallet with active/redeemed coupon history and scannable coupon QR codes. In production, the merchant's authenticated cashier validates the QR; residents cannot mark their own coupons as redeemed.
 - Coupon validation scoped to the cashier's merchant. A successful redemption is recorded once and moves the coupon out of the active wallet.
 - Server-issued EcoID QR codes that expire after 45 seconds and can be used once. An authorized cashier scan awards 10 points to the associated account and confirms the scan in the resident's open EcoID screen through authenticated server events.
@@ -33,6 +34,10 @@ The frontend is static and does not contain database credentials. Account, coupo
 ### Install VilaCircula
 
 On a first visit, choose **Añadir aplicación** on the sign-in screen or welcome card. Supported browsers open their native install prompt; on iPhone or iPad, open the site in Safari and use **Compartir → Añadir a pantalla de inicio**. Installation must be confirmed in the browser and cannot be triggered automatically. The service worker caches the app shell for repeat visits and offline access to cached frontend resources.
+
+### Independent marketing landing page
+
+The self-contained website in [`landing-page/`](./landing-page/) is separate from the PWA. To use it elsewhere, copy the entire folder to a static web host and publish its `index.html`; it has no app/API login links or runtime dependency on this repository. Its styling and interactions are in `style.css` and `script.js`. The existing PWA remains at the repository root and is unchanged.
 
 ### Merchant map and location
 
@@ -79,6 +84,8 @@ The home dashboard can request access to the device-motion sensor and estimate s
 ### Coupon wallet and QR validation
 
 When a resident redeems an available reward, the API checks their balance, deducts the reward cost, and creates a single-use coupon in the wallet. Active coupons display a QR code and expiry; redeemed coupons move into the wallet's history. While an active coupon is open, the app checks whether the merchant has validated it and updates the view when its status changes.
+
+An authenticated cashier can create an offer by describing what the resident receives, its EcoPunts cost, and a short description. Offers are published to the resident catalog immediately. The owning merchant can pause or reactivate offers; coupons already issued remain valid and retain the original offer details.
 
 In production, the resident presents the coupon QR at the shop. An authenticated cashier scans it; the API checks that the cashier belongs to the coupon's merchant and prevents a second redemption. Resident self-redemption is disabled in production. The cashier's EcoID scanner is a separate flow: a resident displays a short-lived, single-use EcoID QR and an authorized cashier scan awards 10 points. While the QR is open, the resident app receives an authenticated server-sent event when it is scanned; if that connection drops, it retries with backoff and checks status periodically. Returning to the app or regaining internet also triggers an immediate check. The QR panel shows connection, retry, expiry, and session-error states.
 

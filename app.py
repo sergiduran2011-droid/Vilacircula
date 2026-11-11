@@ -167,6 +167,16 @@ REWARDS = (
     {"id": "plant", "name": "Planta aromática", "store": "Comercio de alimentación · ejemplo", "merchant_id": "demo-papeleria", "cost": 40, "art": "plant", "icon": "sprout", "description": "Recompensa de demostración.", "is_demo": True},
 )
 
+class MerchantRewardCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    cost: int = Field(ge=1, le=100_000)
+    description: str = Field(min_length=5, max_length=280)
+
+
+class MerchantRewardStatus(BaseModel):
+    active: bool
+
+
 CASHIER_SEEDS = (
     ("caja.cafe-marco", "osm-12752947043"),
     ("caja.am-bakery", "osm-11432296231"),
@@ -246,6 +256,16 @@ CREATE TABLE IF NOT EXISTS coupons (
     redeemed_by TEXT REFERENCES cashier_users(id)
 );
 CREATE INDEX IF NOT EXISTS coupons_profile_status_idx ON coupons(profile_id, status);
+CREATE TABLE IF NOT EXISTS merchant_rewards (
+    id TEXT PRIMARY KEY,
+    merchant_id TEXT NOT NULL REFERENCES merchants(id),
+    name TEXT NOT NULL,
+    cost INTEGER NOT NULL CHECK (cost > 0),
+    description TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS merchant_rewards_catalog_idx ON merchant_rewards(active, merchant_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS coupon_validations (
     id TEXT PRIMARY KEY,
     code TEXT NOT NULL,
@@ -1403,7 +1423,107 @@ def create_app(
 
     @app.get("/api/v1/rewards")
     def rewards() -> dict[str, object]:
-        return {"items": list(REWARDS), "is_demo": True}
+        demo_filter = "" if not production else "AND merchants.is_demo = 0"
+        with closing(connect()) as connection:
+            merchant_rewards = connection.execute(
+                "SELECT rewards.*, merchants.name AS store, merchants.is_demo "
+                "FROM merchant_rewards AS rewards "
+                "JOIN merchants ON merchants.id = rewards.merchant_id "
+                f"WHERE rewards.active = 1 {demo_filter} ORDER BY rewards.created_at DESC"
+            ).fetchall()
+        items = [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "store": row["store"],
+                "merchant_id": row["merchant_id"],
+                "cost": row["cost"],
+                "art": "merchant",
+                "icon": "gift",
+                "description": row["description"],
+                "is_demo": bool(row["is_demo"]),
+            }
+            for row in merchant_rewards
+        ]
+        return {"items": [*REWARDS, *items], "is_demo": True}
+
+    @app.get("/api/v1/cashier/rewards")
+    def cashier_rewards(cashier: sqlite3.Row = Depends(current_cashier)) -> dict[str, object]:
+        if cashier["must_change_password"]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cambia la contraseña inicial antes de gestionar ofertas.")
+        with closing(connect()) as connection:
+            rows = connection.execute(
+                "SELECT id, name, cost, description, active, created_at "
+                "FROM merchant_rewards WHERE merchant_id = ? ORDER BY created_at DESC",
+                (cashier["merchant_id"],),
+            ).fetchall()
+        return {"items": [{**dict(row), "active": bool(row["active"])} for row in rows]}
+
+    @app.post("/api/v1/cashier/rewards", status_code=status.HTTP_201_CREATED)
+    def create_cashier_reward(
+        payload: MerchantRewardCreate,
+        cashier: sqlite3.Row = Depends(current_cashier),
+    ) -> dict[str, object]:
+        if cashier["must_change_password"]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cambia la contraseña inicial antes de gestionar ofertas.")
+        name = payload.name.strip()
+        description = payload.description.strip()
+        if len(name) < 2 or len(description) < 5:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Indica qué recibe la persona y una descripción válida.")
+        if production and cashier["merchant_is_demo"]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Los comercios de demostración no pueden publicar ofertas.")
+        reward_id = f"mr-{uuid.uuid4()}"
+        created_at = timestamp()
+        with closing(connect()) as connection:
+            connection.execute(
+                "INSERT INTO merchant_rewards (id, merchant_id, name, cost, description, active, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 1, ?)",
+                (reward_id, cashier["merchant_id"], name, payload.cost, description, created_at),
+            )
+            row = connection.execute(
+                "SELECT id, name, cost, description, active, created_at FROM merchant_rewards WHERE id = ?",
+                (reward_id,),
+            ).fetchone()
+        add_audit_event(
+            "merchant_reward_created",
+            actor_type="cashier",
+            actor_id=cashier["id"],
+            target_type="merchant_reward",
+            target_id=reward_id,
+            message="Oferta publicada en el catálogo",
+            metadata={"merchant_id": cashier["merchant_id"], "cost": payload.cost},
+        )
+        return {**dict(row), "active": bool(row["active"])}
+
+    @app.patch("/api/v1/cashier/rewards/{reward_id}")
+    def update_cashier_reward(
+        reward_id: str,
+        payload: MerchantRewardStatus,
+        cashier: sqlite3.Row = Depends(current_cashier),
+    ) -> dict[str, object]:
+        if cashier["must_change_password"]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cambia la contraseña inicial antes de gestionar ofertas.")
+        with closing(connect()) as connection:
+            updated = connection.execute(
+                "UPDATE merchant_rewards SET active = ? WHERE id = ? AND merchant_id = ?",
+                (int(payload.active), reward_id, cashier["merchant_id"]),
+            )
+            if updated.rowcount != 1:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oferta no encontrada en tu comercio.")
+            row = connection.execute(
+                "SELECT id, name, cost, description, active, created_at FROM merchant_rewards WHERE id = ?",
+                (reward_id,),
+            ).fetchone()
+        add_audit_event(
+            "merchant_reward_status_changed",
+            actor_type="cashier",
+            actor_id=cashier["id"],
+            target_type="merchant_reward",
+            target_id=reward_id,
+            message="Estado de oferta actualizado",
+            metadata={"merchant_id": cashier["merchant_id"], "active": payload.active},
+        )
+        return {**dict(row), "active": bool(row["active"])}
 
     @app.get("/api/v1/coupons")
     def coupons(profile: sqlite3.Row = Depends(current_profile)) -> dict[str, object]:
@@ -1423,15 +1543,34 @@ def create_app(
         payload: RewardRedeem,
         profile: sqlite3.Row = Depends(current_profile),
     ) -> dict[str, object]:
-        reward = next((item for item in REWARDS if item["id"] == payload.reward_id), None)
-        if reward is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recompensa no encontrada.")
+        static_reward = next((item for item in REWARDS if item["id"] == payload.reward_id), None)
         code = f"VC-{secrets.token_hex(16).upper()}"
         coupon_id = str(uuid.uuid4())
         created = datetime.now(UTC)
         expires = created + timedelta(days=45)
         with closing(connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            merchant_reward = connection.execute(
+                "SELECT rewards.id, rewards.name, rewards.cost, rewards.merchant_id, merchants.name AS store "
+                "FROM merchant_rewards AS rewards "
+                "JOIN merchants ON merchants.id = rewards.merchant_id "
+                "WHERE rewards.id = ? AND rewards.active = 1",
+                (payload.reward_id,),
+            ).fetchone() if static_reward is None else None
+            reward = static_reward or (
+                {
+                    "id": merchant_reward["id"],
+                    "name": merchant_reward["name"],
+                    "store": merchant_reward["store"],
+                    "merchant_id": merchant_reward["merchant_id"],
+                    "cost": merchant_reward["cost"],
+                }
+                if merchant_reward is not None
+                else None
+            )
+            if reward is None:
+                connection.rollback()
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oferta no disponible.")
             updated = connection.execute(
                 "UPDATE profiles SET balance = balance - ? WHERE id = ? AND balance >= ?",
                 (reward["cost"], profile["id"], reward["cost"]),
@@ -1674,7 +1813,7 @@ def create_app(
     def service_worker() -> FileResponse:
         return FileResponse(ROOT / "sw.js", media_type="application/javascript", headers={"Service-Worker-Allowed": "/"})
 
-    for asset in ("index.html", "manifest.json", "viladecans.js", "viladecans.css", "features.css", "api-client.js", "api-client.css", "cashier.css", "cashier-dashboard.css"):
+    for asset in ("index.html", "manifest.json", "viladecans.js", "viladecans.css", "features.css", "api-client.js", "api-client.css", "cashier.css", "cashier-dashboard.css", "cashier-rewards.css"):
         app.add_api_route(f"/{asset}", lambda asset=asset: FileResponse(ROOT / asset), methods=["GET"], include_in_schema=False)
 
     app.mount("/icons", StaticFiles(directory=ROOT / "icons"), name="icons")

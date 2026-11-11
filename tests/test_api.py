@@ -53,12 +53,15 @@ def create_profile(client, username="sergi"):
 def test_serves_pwa_assets(tmp_path):
     with make_client(tmp_path) as client:
         features = client.get("/features.css")
+        cashier_rewards = client.get("/cashier-rewards.css")
         service_worker = client.get("/sw.js")
         manifest = client.get("/manifest.json")
         icons = [client.get(f"/{icon['src']}") for icon in manifest.json()["icons"]]
 
     assert features.status_code == 200
     assert "engagement-panel" in features.text
+    assert cashier_rewards.status_code == 200
+    assert "cashier-reward-form" in cashier_rewards.text
     assert service_worker.status_code == 200
     assert service_worker.headers["service-worker-allowed"] == "/"
     assert manifest.status_code == 200
@@ -466,6 +469,132 @@ def test_cashier_is_scoped_to_merchant_and_initial_password_must_change(tmp_path
     assert first_scan.status_code == 200
     assert first_scan.json()["merchant"] == "Café Marco"
     assert duplicate_scan.status_code == 409
+
+
+def test_cashier_publishes_scoped_reward_and_existing_coupon_survives_deactivation(tmp_path):
+    with make_client(tmp_path) as client:
+        _, citizen_headers = create_profile(client)
+        cashier_login = client.post(
+            "/api/v1/auth/cashier/login",
+            json={"username": "caja.cafe-marco", "password": "Viladecans"},
+        )
+        cashier_token = cashier_login.json()["token"]
+        cashier_headers = {"Authorization": "Bearer " + cashier_token}
+        forbidden_until_password_change = client.post(
+            "/api/v1/cashier/rewards",
+            json={"name": "Café y tostada", "cost": 45, "description": "Desayuno en el local."},
+            headers=cashier_headers,
+        )
+        changed = client.put(
+            "/api/v1/cashier/password",
+            json={"password": "cafe-marco-clave-23"},
+            headers=cashier_headers,
+        )
+        cashier_headers = {"Authorization": "Bearer " + changed.json()["token"]}
+
+        created = client.post(
+            "/api/v1/cashier/rewards",
+            json={"name": "Café y tostada", "cost": 45, "description": "Desayuno en el local."},
+            headers=cashier_headers,
+        )
+        reward = created.json()
+        own_offers = client.get("/api/v1/cashier/rewards", headers=cashier_headers)
+        catalog = client.get("/api/v1/rewards").json()["items"]
+        citizen_coupon = client.post(
+            "/api/v1/coupons",
+            json={"reward_id": reward["id"]},
+            headers=citizen_headers,
+        )
+
+        other_login = client.post(
+            "/api/v1/auth/cashier/login",
+            json={"username": "caja.am-bakery", "password": "Viladecans"},
+        )
+        other_headers = {"Authorization": "Bearer " + other_login.json()["token"]}
+        other_changed = client.put(
+            "/api/v1/cashier/password",
+            json={"password": "am-bakery-clave-24"},
+            headers=other_headers,
+        )
+        other_headers = {"Authorization": "Bearer " + other_changed.json()["token"]}
+        other_offers = client.get("/api/v1/cashier/rewards", headers=other_headers)
+        other_shop_cannot_manage_reward = client.patch(
+            f"/api/v1/cashier/rewards/{reward['id']}",
+            json={"active": False},
+            headers=other_headers,
+        )
+
+        deactivated = client.patch(
+            f"/api/v1/cashier/rewards/{reward['id']}",
+            json={"active": False},
+            headers=cashier_headers,
+        )
+        catalog_after_deactivation = client.get("/api/v1/rewards").json()["items"]
+        paused_offer_cannot_be_redeemed = client.post(
+            "/api/v1/coupons",
+            json={"reward_id": reward["id"]},
+            headers=citizen_headers,
+        )
+        redeemed = client.post(
+            "/api/v1/cashier/coupons/redeem",
+            json={"code": citizen_coupon.json()["coupon"]["code"]},
+            headers=cashier_headers,
+        )
+
+    assert cashier_login.status_code == 200
+    assert forbidden_until_password_change.status_code == 403
+    assert changed.status_code == 200
+    assert created.status_code == 201
+    assert reward["active"] is True
+    assert own_offers.json()["items"] == [{**reward}]
+    assert any(item["id"] == reward["id"] for item in catalog)
+    assert citizen_coupon.status_code == 201
+    assert other_login.status_code == 200
+    assert other_changed.status_code == 200
+    assert other_offers.json()["items"] == []
+    assert other_shop_cannot_manage_reward.status_code == 404
+    assert deactivated.status_code == 200
+    assert deactivated.json()["active"] is False
+    assert all(item["id"] != reward["id"] for item in catalog_after_deactivation)
+    assert paused_offer_cannot_be_redeemed.status_code == 404
+    assert redeemed.status_code == 200
+    assert redeemed.json()["status"] == "redeemed"
+
+
+def test_cashier_reward_validates_fields_and_insufficient_balance(tmp_path):
+    with make_client(tmp_path) as client:
+        _, citizen_headers = create_profile(client)
+        login = client.post(
+            "/api/v1/auth/cashier/login",
+            json={"username": "caja.cafe-marco", "password": "Viladecans"},
+        )
+        headers = {"Authorization": "Bearer " + login.json()["token"]}
+        changed = client.put(
+            "/api/v1/cashier/password",
+            json={"password": "cafe-marco-clave-23"},
+            headers=headers,
+        )
+        headers = {"Authorization": "Bearer " + changed.json()["token"]}
+        invalid = client.post(
+            "/api/v1/cashier/rewards",
+            json={"name": "   ", "cost": 0, "description": "x"},
+            headers=headers,
+        )
+        reward = client.post(
+            "/api/v1/cashier/rewards",
+            json={"name": "Cesta especial", "cost": 151, "description": "Una cesta para canjear."},
+            headers=headers,
+        )
+        insufficient = client.post(
+            "/api/v1/coupons",
+            json={"reward_id": reward.json()["id"]},
+            headers=citizen_headers,
+        )
+
+    assert login.status_code == 200
+    assert invalid.status_code == 422
+    assert reward.status_code == 201
+    assert insufficient.status_code == 409
 
 
 def test_cashier_eco_id_award_is_authorized_single_use_and_updates_balance(tmp_path):

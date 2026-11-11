@@ -430,11 +430,21 @@
     }
   }
 
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    })[character]);
+  }
+
   function renderWallet() {
     document.querySelector('#rewards').innerHTML = prizes.map(prize => {
       const missing = Math.max(0, prize.cost - state.balance);
       const afford = missing === 0;
-      return `<article class="reward"><div class="reward-art ${prize.art}"><i data-lucide="${prize.icon}"></i></div><div class="reward-info"><span class="merchant-tag">${prize.store}</span><h3>${prize.name}</h3><p>${prize.description}</p><div class="reward-foot"><span class="cost">${prize.cost} ECO PTS</span><button class="redeem" data-redeem="${prize.id}" ${afford ? '' : 'disabled'}>${afford ? 'Canjear' : `Faltan ${missing}`}</button></div></div></article>`;
+      return `<article class="reward"><div class="reward-art ${escapeHtml(prize.art)}"><i data-lucide="${escapeHtml(prize.icon)}"></i></div><div class="reward-info"><span class="merchant-tag">${escapeHtml(prize.store)}</span><h3>${escapeHtml(prize.name)}</h3><p>${escapeHtml(prize.description)}</p><div class="reward-foot"><span class="cost">${escapeHtml(prize.cost)} ECO PTS</span><button class="redeem" data-redeem="${escapeHtml(prize.id)}" ${afford ? '' : 'disabled'}>${afford ? 'Canjear' : `Faltan ${missing}`}</button></div></div></article>`;
     }).join('');
     const count = document.querySelector('#coupon-count');
     count.textContent = `${state.coupons.length} VALES`;
@@ -450,7 +460,7 @@
       count.parentElement.append(scanButton);
     }
     document.querySelector('#coupons').innerHTML = state.coupons.length
-      ? state.coupons.map(coupon => `<article class="coupon"><button class="coupon-qr" data-open-coupon="${coupon.code}" aria-label="Ver QR de ${coupon.name}"><span id="coupon-qr-${coupon.code}"></span></button><span class="coupon-text"><b>${coupon.name}</b><small>${coupon.store} · Válido hasta ${coupon.expiry}</small><button class="coupon-view" data-open-coupon="${coupon.code}">Ver QR y canjear</button></span><span class="coupon-code">${coupon.code}</span></article>`).join('')
+      ? state.coupons.map(coupon => `<article class="coupon"><button class="coupon-qr" data-open-coupon="${escapeHtml(coupon.code)}" aria-label="Ver QR de ${escapeHtml(coupon.name)}"><span id="coupon-qr-${escapeHtml(coupon.code)}"></span></button><span class="coupon-text"><b>${escapeHtml(coupon.name)}</b><small>${escapeHtml(coupon.store)} · Válido hasta ${escapeHtml(coupon.expiry)}</small><button class="coupon-view" data-open-coupon="${escapeHtml(coupon.code)}">Ver QR y canjear</button></span><span class="coupon-code">${escapeHtml(coupon.code)}</span></article>`).join('')
       : '<p class="empty">Tus próximos premios aparecerán aquí.</p>';
     document.querySelectorAll('[id^="coupon-qr-"]').forEach(qr => {
       const code = qr.id.replace('coupon-qr-', '');
@@ -462,7 +472,7 @@
       const section = document.createElement('section');
       section.id = 'redeemed-coupons';
       section.className = 'redeemed-list';
-      section.innerHTML = `<h3>Cupones canjeados <span>${state.redeemedCoupons.length}</span></h3>${state.redeemedCoupons.map(coupon => `<div class="redeemed-row"><i data-lucide="circle-check"></i><span><b>${coupon.name}</b><small>${coupon.store} · Canjeado ${coupon.redeemedAt || 'hoy'}</small></span><strong>CANJEADO</strong></div>`).join('')}`;
+      section.innerHTML = `<h3>Cupones canjeados <span>${state.redeemedCoupons.length}</span></h3>${state.redeemedCoupons.map(coupon => `<div class="redeemed-row"><i data-lucide="circle-check"></i><span><b>${escapeHtml(coupon.name)}</b><small>${escapeHtml(coupon.store)} · Canjeado ${escapeHtml(coupon.redeemedAt || 'hoy')}</small></span><strong>CANJEADO</strong></div>`).join('')}`;
       document.querySelector('.coupon-list').append(section);
     }
     icons();
@@ -575,7 +585,7 @@
     const modal = document.createElement('div');
     modal.id = 'coupon-modal';
     modal.className = 'modal-backdrop';
-    modal.innerHTML = `<section class="modal coupon-modal" role="dialog" aria-modal="true" aria-labelledby="coupon-modal-title"><button class="icon-button modal-close" id="close-coupon" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">MONEDERO VILACIRCULA</span><h2 id="coupon-modal-title">${coupon ? coupon.name : merchantValidationOnly ? 'Canje en el comercio' : 'Escanea un cupón'}</h2><p>${coupon ? `${coupon.store} · Código de un solo uso` : merchantValidationOnly ? 'El personal del comercio valida el cupón desde su caja. No marques tu propio vale como canjeado.' : 'Lee el QR de un cupón activo para marcarlo como canjeado.'}</p>${coupon ? `<div class="coupon-large-qr" id="coupon-large-qr"></div><div class="coupon-large-code">${coupon.code}</div>` : ''}${merchantValidationOnly ? '' : '<div class="scanner-preview" id="scanner-preview" hidden><video id="coupon-video" playsinline muted></video><span class="scan-frame"></span></div>'}<p class="scanner-status" id="scanner-status">${coupon ? merchantValidationOnly ? 'Muestra este QR en la caja. El estado se actualizará cuando el comercio lo valide.' : 'Muestra este QR al comercio o escanea aquí un vale activo.' : merchantValidationOnly ? '' : 'La cámara solo se usa para leer el QR de un cupón.'}</p>${merchantValidationOnly ? '' : `<div class="coupon-modal-actions"><button class="primary" id="start-coupon-scan"><i data-lucide="scan-line"></i>Escanear con cámara</button>${coupon ? '<button class="redeem" id="simulate-coupon-scan">Simular escaneo</button>' : ''}</div>`}</section>`;
+    modal.innerHTML = `<section class="modal coupon-modal" role="dialog" aria-modal="true" aria-labelledby="coupon-modal-title"><button class="icon-button modal-close" id="close-coupon" aria-label="Cerrar"><i data-lucide="x"></i></button><span class="eyebrow">MONEDERO VILACIRCULA</span><h2 id="coupon-modal-title">${coupon ? escapeHtml(coupon.name) : merchantValidationOnly ? 'Canje en el comercio' : 'Escanea un cupón'}</h2><p>${coupon ? `${escapeHtml(coupon.store)} · Código de un solo uso` : merchantValidationOnly ? 'El personal del comercio valida el cupón desde su caja. No marques tu propio vale como canjeado.' : 'Lee el QR de un cupón activo para marcarlo como canjeado.'}</p>${coupon ? `<div class="coupon-large-qr" id="coupon-large-qr"></div><div class="coupon-large-code">${escapeHtml(coupon.code)}</div>` : ''}${merchantValidationOnly ? '' : '<div class="scanner-preview" id="scanner-preview" hidden><video id="coupon-video" playsinline muted></video><span class="scan-frame"></span></div>'}<p class="scanner-status" id="scanner-status">${coupon ? merchantValidationOnly ? 'Muestra este QR en la caja. El estado se actualizará cuando el comercio lo valide.' : 'Muestra este QR al comercio o escanea aquí un vale activo.' : merchantValidationOnly ? '' : 'La cámara solo se usa para leer el QR de un cupón.'}</p>${merchantValidationOnly ? '' : `<div class="coupon-modal-actions"><button class="primary" id="start-coupon-scan"><i data-lucide="scan-line"></i>Escanear con cámara</button>${coupon ? '<button class="redeem" id="simulate-coupon-scan">Simular escaneo</button>' : ''}</div>`}</section>`;
     document.querySelector('#modal-root').append(modal);
     icons();
     if (coupon) fillQr(document.querySelector('#coupon-large-qr'), couponPayload(coupon.code), 202);
